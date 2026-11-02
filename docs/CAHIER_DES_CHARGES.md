@@ -503,7 +503,7 @@ La V1 ne sera considérée comme fonctionnelle que lorsque les conditions suivan
 - Les données peuvent être exportées en JSON et CSV et supprimées intégralement après confirmation explicite.
 - Les photos sont compressées avant transfert, supprimées automatiquement 30 jours après analyse ou manuellement, sans supprimer le repas ni ses apports.
 - Le moteur conserve 6 décimales en interne; il affiche les kcal à l’unité et les nutriments en grammes à 0,1 g, arrondis demi vers le haut.
-- Un conflit de synchronisation sur l’appareil principal est signalé sans écrasement silencieux.
+- En cas de modifications concurrentes, la dernière modification confirmée par le serveur est conservée. Une suppression confirmée prévaut sur toute ancienne copie; aucune résolution manuelle n'est demandée.
 - L'assistance IA peut exploiter les données enregistrées.
 - Une saisie peut rester en attente en cas d'indisponibilité du backend.
 - La synchronisation ne crée pas de doublons.
