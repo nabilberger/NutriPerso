@@ -151,7 +151,7 @@ Les contrats IA doivent inclure un type de tâche, un schéma de réponse versio
 - À la validation d’un repas, conserver un instantané des quantités, unités, références nutritionnelles et apports calculés utilisés. Une modification ultérieure du catalogue ne recalcule pas les consommations historiques. Pour une portion de recette, conserver aussi la version consommée et son instantané nutritionnel; les modifications de recette ne réécrivent pas l’historique.
 - Même moteur pour aliments, recettes, repas et totaux journaliers. Les apports dérivés d’une recette se rapportent au nombre de portions défini.
 
-La précision et les règles d’arrondi sont actées. Les décisions relatives aux unités de saisie, aux équivalences de portions domestiques, densités et nutriments suivis restent à confirmer. Les consommations historiques restent immuables vis-à-vis des changements de catalogue et de recette.
+La précision et les règles d’arrondi sont actées. Les portions domestiques ont des équivalences explicites propres à chaque aliment; une conversion g/ml exige une densité documentée. Les nutriments V1 sont kcal, protéines, glucides, lipides et fibres. Les repas historiques restent immuables face aux changements du catalogue/recette, mais une modification explicite du repas recalcule et remplace son instantané.
 
 ## 7. Sécurité, confidentialité et configuration
 
@@ -187,7 +187,7 @@ Cloudflare Workers Free annonce une limite de 100 000 requêtes/jour et 10 ms CP
 
 **Gemini → autre fournisseur :** implémenter l’adaptateur contre le même contrat, tests de conformité sur les schémas et erreurs, comparer qualité/coût/latence sur des exemples consentis, basculer via configuration. Les prompts restent versionnés par adaptateur, les règles métier ne changent pas.
 
-**Sauvegardes indépendantes de Supabase :** job planifié hors des fonctions de sauvegarde Supabase produisant un export PostgreSQL restaurable (`pg_dump` cohérent), une copie des fichiers Storage et un manifeste associant clés, tailles et empreintes cryptographiques. Chiffrer les archives avant transfert vers une destination indépendante (par exemple un bucket S3 compatible dans un autre compte/fournisseur); protéger la clé séparément. Alerter en cas d’échec et tester périodiquement une restauration complète de la base et des objets. Fréquence, destination, durée de rétention et budget restent à valider. Les exports JSON/CSV utilisateur ne remplacent pas une sauvegarde restaurable.
+**Sauvegardes redondantes actées :** sauvegarde automatique quotidienne, rétention glissante de 30 jours, deux destinations (Supabase et serveur personnel) et sauvegarde manuelle. Chaque archive contient un export PostgreSQL cohérent, les fichiers et un manifeste (clés, tailles, empreintes). Chiffrement avant transfert, clé conservée séparément, signalement des échecs et test périodique de restauration complète. Les suppressions confirmées postérieures au point de sauvegarde sont rejouées après restauration.
 
 ## 9. Limites et coûts à anticiper
 
@@ -217,19 +217,10 @@ Cloudflare Workers Free annonce une limite de 100 000 requêtes/jour et 10 ms CP
 | Auth | Supabase Auth / OIDC | Session et mécanismes standards, transition comptes possible | Configuration, secrets et règles de sécurité à traiter; ne pas intégrer directement à tous les modules. |
 | Auth | Secret partagé à usage privé | Simplicité de mise en route | Rotation et partage délicats, risque si exposé; acceptable seulement derrière mécanisme serveur soigneusement protégé et à valider. |
 
-## 11. Questions techniques restant à arbitrer
+## 11. Décisions actées et points restant à préciser
 
-Les décisions fonctionnelles reprises ci-dessous ne sont plus ouvertes : réutilisation calculée avec le catalogue courant; précision et arrondis nutritionnels; seuils et états du calendrier; moyennes hors journées vides; expiration des conversations 7 jours après création; affichage des 20 repas récents avec recherche; appareil principal et absence d’écrasement silencieux; jeûne quotidien fixe; objectifs Mifflin-St Jeor avec facteur d’activité commutable et sans ajout d’exercice.
+Décisions actées : sauvegardes quotidiennes chiffrées sur Supabase et serveur personnel, rétention 30 jours et sauvegarde manuelle; dernière modification confirmée conservée et suppression confirmée prioritaire; catalogue USDA + local + personnalisé; objectifs perte/maintien/prise calculés initialement par Mifflin-St Jeor et modifiables; demandes IA hors ligne conservées jusqu'à relance ou annulation; export JSON/CSV et fichiers en ZIP.
 
-Restent à décider avant la conception du modèle et l’implémentation :
+Restent à préciser : outil de migrations et séparation des environnements; validation Hyperdrive/Supabase; formats et taille maximale des photos; détails des portions et densités; processus d'import USDA; comportement du calendrier sans objectif; actions sur les modèles; unités des mesures; historique de jeûne/rappels; notifications app fermée; rétention des données chez Gemini.
 
-- Outil de migrations, séparation des environnements, test Hyperdrive/Supabase, exposition publique et acceptabilité des limites gratuites.
-- Fréquence, destination et rétention des sauvegardes, et mécanisme empêchant une restauration de faire réapparaître des données supprimées.
-- Formats/taille maximale des photos et façon de joindre les fichiers binaires à l’export JSON/CSV.
-- Équivalences de portions et densités, nutriments suivis, provenance du catalogue et processus d’import USDA.
-- Résolution explicite des conflits hors ligne malgré un appareil principal; aucune valeur ne doit être écrasée silencieusement.
-- Comportement du calendrier en l’absence d’objectif, et méthode de calcul de la cible selon l’objectif pondéral.
-- Actions autorisées sur les modèles de repas; unités/périmètre des mesures corporelles et contenu de l’historique de jeûne/rappels.
-- Comportement des notifications locales lorsque l’application est fermée et rétention des données chez Gemini au-delà de NutriPerso.
-
-L’architecture reste sans schéma ni tables SQL. Elle conserve les fournisseurs derrière des ports et les règles métier hors des adaptateurs techniques.
+L'architecture reste sans schéma ni tables SQL. Le modèle de données décrit séparément entités, relations, contraintes et instantanés métier.
