@@ -141,11 +141,7 @@ Les valeurs nutritionnelles doivent notamment couvrir :
 - Lipides.
 - Fibres.
 
-Source de départ recommandée : USDA FoodData Central.
-
-Le catalogue devra pouvoir être enrichi par des aliments personnalisés, des produits disponibles localement et des ingrédients spécifiques.
-
-Les aliments personnalisés doivent pouvoir être corrigés par l'utilisateur.
+Le catalogue repose sur trois sources : USDA FoodData Central pour les aliments génériques; un catalogue local NutriPerso pour les aliments marocains et produits courants absents ou incomplets; et les aliments personnalisés créés/corrigés par l'utilisateur. Chaque aliment conserve sa provenance, son identifiant externe éventuel et sa date d'import/modification. Un import ne doit pas écraser silencieusement une fiche personnalisée. Les changements du catalogue ne modifient pas les instantanés des repas déjà consommés.
 
 ## 3.4 Moteur de calcul nutritionnel
 
@@ -262,7 +258,7 @@ La simplicité et la fiabilité priment sur la multiplication des mécanismes de
 
 Au premier lancement, un formulaire obligatoire recueille l'âge, le sexe, la taille, le poids, le niveau d'activité physique, l'objectif pondéral et indique si l'utilisateur pratique le jeûne intermittent. Ces informations restent modifiables dans les paramètres.
 
-Le métabolisme de base est estimé avec la formule Mifflin-St Jeor. Le niveau d'activité physique intervient dans l'estimation des besoins énergétiques. Un interrupteur dans les paramètres permet d'inclure ou non ce facteur dans l'estimation, selon un fonctionnement comparable à PlateLens. L'objectif calorique personnel reste librement modifiable. Les calories dépensées lors d'exercices ne sont pas ajoutées automatiquement à l'objectif quotidien.
+L'objectif pondéral proposé est perte, maintien ou prise de poids. Le métabolisme de base est estimé avec Mifflin-St Jeor. Le niveau d'activité intervient dans l'estimation des besoins énergétiques et peut être inclus ou non via un interrupteur. La cible initiale est calculée selon l'objectif choisi, puis reste librement modifiable. Les calories dépensées lors d'exercices ne sont pas ajoutées automatiquement à l'objectif quotidien.
 
 Chaque modification d'objectif calorique porte une date d'effet. Les objectifs appliqués aux jours passés restent inchangés lorsqu'un nouvel objectif est défini. Une correction manuelle exceptionnelle d'un objectif pour une date passée est autorisée.
 
@@ -276,29 +272,29 @@ Des notifications sont proposées à l'ouverture et à la fermeture des fenêtre
 
 ## 3.12 Export et suppression des données
 
-L'utilisateur peut exporter l'ensemble de ses données au format JSON et CSV : repas et historique nutritionnel, aliments personnels, recettes, mesures corporelles, profil et paramètres, objectifs datés, conversations encore conservées, rappels, configuration/historique du jeûne intermittent et autres données utiles. Les fichiers associés doivent être inclus ou accompagnés de leurs données de liaison.
+L'utilisateur peut exporter les données structurées au format JSON et CSV : repas, historique nutritionnel, aliments personnels, recettes, mesures, profil, objectifs datés, conversations conservées, rappels et jeûne intermittent. Les photos et autres fichiers binaires sont fournis dans une archive ZIP séparée avec un manifeste reliant chaque fichier à son enregistrement. Une restauration complète doit reconstituer les données et fichiers associés.
 
 L'utilisateur peut demander la suppression complète de ses données NutriPerso, notamment son profil et compte, historique, conversations, rappels, paramètres, fichiers et données locales synchronisées. Cette action exige une confirmation explicite avant exécution.
 
 
-L'application doit permettre la saisie des repas même lorsque le backend est momentanément inaccessible.
+# 4. Fonctionnement hors connexion
 
-Une file d'attente locale doit conserver les opérations en attente.
+La saisie, la modification et la suppression des repas restent possibles lorsque le backend est inaccessible. Les opérations sont conservées dans une file locale et synchronisées au retour de la connexion. Chaque opération possède un identifiant unique/idempotent.
 
-Chaque opération doit disposer d'un identifiant unique permettant d'éviter les doublons lors de la synchronisation.
+Les demandes d'analyse IA créées hors connexion (contexte et photo éventuelle inclus) restent dans une liste « En attente » jusqu'à relance après reconnexion ou annulation par l'utilisateur. Aucune expiration automatique. Elles ne sont pas analysées ni enregistrées comme repas définitifs sans connexion et validation explicite.
 
-États possibles :
+Les repas enregistrés restent modifiables ou supprimables à tout moment. Une modification met à jour le repas et ses calculs/statistiques. Les instantanés nutritionnels ne changent pas lors d'une modification du catalogue ou d'une recette; ils sont recalculés lorsque l'utilisateur modifie explicitement le repas.
 
-- En attente.
-- En cours de traitement.
-- Synchronisé.
-- Erreur nécessitant une intervention.
+En cas de modifications concurrentes, la règle est « dernière modification confirmée = version conservée ». L'ordre est attribué par le serveur, pas par l'horloge du client. Une suppression confirmée est synchronisée comme suppression logique et prévaut sur toute ancienne copie. Aucun écran de résolution manuelle n'est prévu en V1.
 
-La synchronisation doit reprendre automatiquement lorsque le backend redevient accessible. La V1 prévoit un appareil principal. Si un conflit survient, il doit être signalé et résolu explicitement; aucune modification ne peut écraser silencieusement une autre.
+L'analyse photo et l'assistance IA nécessitent une connexion.
 
-La reconnaissance photographique et l'assistance IA nécessitent une connexion aux services correspondants. Les demandes doivent rester en attente lorsqu'elles ne peuvent pas être traitées.
+## 4.1 Sauvegardes et restauration
 
-Le fonctionnement hors connexion n'a pas vocation à reproduire l'ensemble des services en local.
+Sauvegarde automatique quotidienne, conservation glissante de 30 jours et deux copies indépendantes : une dans l'environnement Supabase et une sur le serveur personnel de l'utilisateur. Une sauvegarde manuelle est disponible à la demande.
+
+Les archives (base PostgreSQL restaurable, fichiers et manifeste d'intégrité) sont chiffrées avant transfert et stockage; la clé est conservée séparément. Les échecs doivent être signalés et une restauration complète testée périodiquement. Après restauration, les suppressions confirmées postérieures au point de sauvegarde sont rejouées afin qu'aucune donnée supprimée ne réapparaisse.
+
 
 # 5. Architecture technique cible
 
