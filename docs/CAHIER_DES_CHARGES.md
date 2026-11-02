@@ -91,12 +91,12 @@ L’utilisateur doit pouvoir réutiliser rapidement des repas consommés précé
 Distinguer clairement :
 
 - **Repas consommés** : enregistrements datés du journal, conservés dans l’historique avec leurs instantanés nutritionnels.
-- **Repas récents** : repas consommés proposés comme point de départ d’une nouvelle saisie; ils restent des enregistrements historiques et ne deviennent pas des modèles du seul fait d’être récents.
+- **Repas récents** : les 20 dernières consommations proposées comme point de départ d’une nouvelle saisie; une recherche permet de retrouver les consommations plus anciennes. Elles restent des enregistrements historiques et ne deviennent pas des modèles du seul fait d’être récentes.
 - **Modèles de repas enregistrés** : repas volontairement sauvegardés sous un nom choisi par l’utilisateur et disponibles pour des saisies futures.
 
-Depuis un repas récent ou un modèle enregistré, l’utilisateur peut démarrer une nouvelle saisie. L’application préremplit sa composition et les portions initiales. L’utilisateur peut modifier directement le grammage de chaque portion sans reconstruire le repas ni rechercher de nouveau les aliments. Les valeurs nutritionnelles affichées sont recalculées immédiatement par le moteur déterministe de NutriPerso.
+Depuis un repas récent ou un modèle enregistré, l’utilisateur peut démarrer une nouvelle saisie. L’application préremplit sa composition et les portions initiales et utilise les valeurs nutritionnelles actuellement présentes au catalogue. L’utilisateur peut modifier directement le grammage de chaque portion sans reconstruire le repas ni rechercher de nouveau les aliments. Les valeurs nutritionnelles affichées sont recalculées immédiatement par le moteur déterministe de NutriPerso.
 
-La nouvelle saisie est indépendante de son origine. Sa modification ou sa validation ne modifie jamais le repas consommé d’origine, son instantané nutritionnel, ni le modèle enregistré. Modifier un modèle ne modifie jamais les repas déjà consommés. Une saisie en cours à partir d’un modèle reste indépendante des modifications ultérieures apportées au modèle.
+La nouvelle saisie est indépendante de son origine. Elle recalcule ses apports selon les valeurs actuellement présentes au catalogue. Sa modification ou sa validation ne modifie jamais le repas consommé d’origine ni son instantané nutritionnel historique, ni le modèle enregistré. Modifier un modèle ne modifie jamais les repas déjà consommés. Une saisie en cours à partir d’un modèle reste indépendante des modifications ultérieures apportées au modèle.
 
 La réutilisation ne valide pas automatiquement un repas : l’utilisateur peut corriger la composition et les portions directement depuis le journal, puis enregistrer la nouvelle consommation selon le parcours normal. Les contrôles et actions doivent rester simples et rapides pour un usage quotidien. Aucun calcul nutritionnel n’est confié à l’IA.
 
@@ -168,7 +168,7 @@ Les recettes doivent utiliser le même moteur de calcul.
 
 Les résultats doivent être reproductibles et testables.
 
-Les arrondis doivent être gérés de façon cohérente, sans accumuler les erreurs.
+Conserver une précision interne de 6 décimales et ne pas arrondir les valeurs intermédiaires. Afficher les calories en kcal à l’unité et les nutriments exprimés en grammes à 0,1 g, avec arrondi demi vers le haut.
 
 ## 3.5 Recettes personnelles
 
@@ -223,7 +223,7 @@ Prévoir la possibilité d'exporter les données dans des formats standards, not
 
 Le journal alimentaire doit être consultable dans un calendrier interactif avec vues journalière, hebdomadaire et mensuelle, navigation entre les jours, semaines et mois, et sélection d’une journée pour ouvrir son journal détaillé.
 
-Pour chaque journée, le calendrier présente les calories consommées, l’objectif calorique applicable à cette date, l’écart à cet objectif, une indication visuelle du niveau d’apport et l’état de saisie : complète, partielle ou sans données. Il permet de comparer les journées et d’afficher les moyennes caloriques de la période sélectionnée. Le détail journalier inclut les protéines, glucides, lipides et fibres.
+Pour chaque journée, le calendrier présente les calories consommées, l’objectif calorique applicable à cette date, l’écart à cet objectif, une indication visuelle du niveau d’apport et l’état de saisie. Sans repas, la journée est « sans données ». Avec au moins un repas, elle est « complète » uniquement si l’utilisateur l’a explicitement marquée comme terminée; sinon elle est « partielle ». Le niveau visuel est bleu sous 90 % de l’objectif, vert de 90 % à 110 % inclus, et orange au-dessus de 110 %. Les moyennes caloriques d’une période excluent les journées sans repas. Le calendrier permet également de comparer les journées. Le détail journalier inclut les protéines, glucides, lipides et fibres.
 
 L’objectif calorique est configurable et peut évoluer dans le temps. Chaque objectif s’applique à partir d’une date d’effet; un changement ultérieur ne modifie pas les objectifs des jours passés, sauf correction manuelle exceptionnelle de la date concernée.
 
@@ -248,7 +248,7 @@ Le contexte pertinent doit être récupéré depuis les données de NutriPerso �
 
 Les réponses de l'IA doivent distinguer les données enregistrées, les estimations et les recommandations.
 
-Les conversations sont conservées dans NutriPerso pendant 7 jours, présentées dans une liste datée permettant de les retrouver et reprendre ou d'en démarrer une nouvelle. Elles sont supprimées automatiquement à l'expiration; l'utilisateur peut aussi les supprimer manuellement à tout moment. À chaque échange, l'application récupère le contexte nutritionnel utile depuis ses propres données et transmet au modèle uniquement le contexte pertinent. La continuité conversationnelle est gérée par NutriPerso; Gemini ne doit pas être considéré comme conservant une mémoire persistante.
+Les conversations sont conservées dans NutriPerso pendant 7 jours après leur création, présentées dans une liste datée permettant de les retrouver et reprendre ou d'en démarrer une nouvelle. Elles sont supprimées automatiquement à l'expiration; l'utilisateur peut aussi les supprimer manuellement à tout moment. À chaque échange, l'application récupère le contexte nutritionnel utile depuis ses propres données et transmet au modèle uniquement le contexte pertinent. La continuité conversationnelle est gérée par NutriPerso; Gemini ne doit pas être considéré comme conservant une mémoire persistante.
 
 ## 3.9 Rappels et notifications
 
@@ -294,7 +294,7 @@ Chaque opération doit disposer d'un identifiant unique permettant d'éviter les
 - Synchronisé.
 - Erreur nécessitant une intervention.
 
-La synchronisation doit reprendre automatiquement lorsque le backend redevient accessible.
+La synchronisation doit reprendre automatiquement lorsque le backend redevient accessible. La V1 prévoit un appareil principal. Si un conflit survient, il doit être signalé et résolu explicitement; aucune modification ne peut écraser silencieusement une autre.
 
 La reconnaissance photographique et l'assistance IA nécessitent une connexion aux services correspondants. Les demandes doivent rester en attente lorsqu'elles ne peuvent pas être traitées.
 
@@ -475,7 +475,7 @@ La première version fonctionnelle doit couvrir :
 4. Gestion des recettes et réutilisation des repas récents/modèles enregistrés.
 5. Suivi du poids et des mensurations.
 6. Historique et statistiques, dont le calendrier nutritionnel interactif journalier, hebdomadaire et mensuel.
-7. Assistance Gemini avec historique des conversations conservé 7 jours.
+7. Assistance Gemini avec historique des conversations conservé 7 jours après leur création.
 8. File d'attente et synchronisation.
 9. Rappels configurables et notifications locales PWA/navigateur selon permissions.
 10. Configuration initiale, objectifs énergétiques datés et jeûne intermittent configurable.
@@ -489,7 +489,7 @@ Les fonctions commerciales, la gestion complexe de plusieurs comptes et les int�
 La V1 ne sera considérée comme fonctionnelle que lorsque les conditions suivantes seront remplies :
 
 - Un repas peut être saisi manuellement.
-- Un repas récent peut préremplir une nouvelle saisie indépendante, dont les portions sont modifiables avec recalcul nutritionnel immédiat.
+- Les 20 repas consommés les plus récents sont proposés; la recherche retrouve les plus anciens. Une réutilisation recalcule la nouvelle saisie avec les valeurs actuelles du catalogue sans modifier l’historique original.
 - Un repas peut être enregistré sous un nom comme modèle, puis réutilisé sans altérer les repas consommés ni leurs instantanés historiques.
 - Une photographie peut être analysée par Gemini.
 - L'utilisateur peut corriger le résultat de l'analyse.
@@ -500,12 +500,14 @@ La V1 ne sera considérée comme fonctionnelle que lorsque les conditions suivan
 - L'historique est conservé.
 - L'assistant conserve les conversations 7 jours, les supprime automatiquement à expiration et permet leur suppression manuelle; le contexte nutritionnel est rechargé depuis NutriPerso à chaque échange.
 - Les rappels configurables apparaissent dans l'application sans permission système; les notifications locales sont utilisées lorsque le navigateur et les permissions le permettent.
-- Le calendrier affiche les vues jour/semaine/mois, les apports, objectifs datés et écarts, les moyennes et comparaisons, ainsi que les détails nutritionnels et l'état de saisie; ses totaux proviennent du journal sans double saisie.
+- Le calendrier affiche les vues jour/semaine/mois, les apports, objectifs datés et écarts, les moyennes (en excluant les jours sans repas), les comparaisons et détails nutritionnels. Sous 90 % l’indicateur est bleu, entre 90 % et 110 % inclus vert, au-dessus de 110 % orange. Une journée est sans données sans repas, partielle avec repas non marquée terminée, et complète uniquement après marquage explicite par l’utilisateur. Les totaux proviennent du journal sans double saisie.
 - Le formulaire initial est obligatoire, recueille les données personnelles et préférences prévues, et ces informations restent modifiables dans les paramètres.
 - L'objectif énergétique tient compte de l'estimation Mifflin-St Jeor et du facteur d'activité activable/désactivable; aucune calorie d'exercice n'est ajoutée automatiquement. Les dates passées gardent leur objectif sauf correction manuelle exceptionnelle.
 - Le jeûne intermittent peut être configuré, suspendu et consulté dans l'historique; les horaires V1 sont quotidiens et fixes, et les notifications de début/fin dépendent des permissions.
 - Les données peuvent être exportées en JSON et CSV et supprimées intégralement après confirmation explicite.
 - Les photos sont compressées avant transfert, supprimées automatiquement 30 jours après analyse ou manuellement, sans supprimer le repas ni ses apports.
+- Le moteur conserve 6 décimales en interne; il affiche les kcal à l’unité et les nutriments en grammes à 0,1 g, arrondis demi vers le haut.
+- Un conflit de synchronisation sur l’appareil principal est signalé sans écrasement silencieux.
 - L'assistance IA peut exploiter les données enregistrées.
 - Une saisie peut rester en attente en cas d'indisponibilité du backend.
 - La synchronisation ne crée pas de doublons.
