@@ -1,0 +1,30 @@
+{
+  "name": "nutri-perso",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "worker:dev": "wrangler dev --config wrangler.jsonc",
+    "test": "tsx --test worker/test/usda.test.ts",
+    "worker:deploy": "wrangler deploy --config wrangler.jsonc"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "hono": "latest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "tsx": "latest",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vite-plugin-pwa": "2.0.0",
+    "wrangler": "latest"
+  }
+}
