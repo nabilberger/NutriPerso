@@ -24,7 +24,8 @@ const defaults: Profile = {
 }
 const fields = ['display_name','avatar_data_url','height_cm','target_weight_kg','goal','dietary_pattern','meals_per_day','fasting_enabled','fasting_start','fasting_end','avoid_added_salt','avoid_added_sugar','notes','time_zone'] as const
 export class ProfileError extends Error {
-  constructor(readonly status: number, message: string) { super(message) }
+  readonly status: number
+  constructor(status: number, message: string) { super(message); this.status = status }
 }
 function endpoint(env: SupabaseCatalogEnv): string {
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new ProfileError(503, 'Le profil est momentanément indisponible.')
