@@ -101,6 +101,42 @@ test('accepts an invitation callback and allows the invited user to set a passwo
   assert.equal(auth.state().invitationPending, false)
 })
 
+test('accepts the standard invite callback fragment and persists its session before password setup', async () => {
+  const storage = new MemoryStorage()
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const auth = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, fetcher: async (input, init = {}) => {
+    const url = String(input); calls.push({ url, init })
+    if (url.endsWith('/user') && init.method === 'PUT') return Response.json({ id: userId })
+    if (url.endsWith('/user')) return Response.json({ id: userId, email: 'invited@example.test' })
+    throw new Error(`Unexpected URL: ${url}`)
+  } })
+  const callbackUrl = 'https://nutri.brainboost3d.com/#access_token=invite-access&refresh_token=invite-refresh&expires_in=3600&token_type=bearer&type=invite'
+  const restored = await auth.initialize(callbackUrl)
+  assert.equal(restored?.access_token, 'invite-access')
+  assert.equal(auth.state().invitationPending, true)
+  assert.equal(storage.getItem('nutrip.auth.session.v1') !== null, true)
+  assert.equal(new Headers(calls[0]?.init.headers).get('authorization'), 'Bearer invite-access')
+  await auth.setInvitedUserPassword('a-secure-passphrase')
+  assert.equal(auth.state().invitationPending, false)
+  assert.deepEqual(calls.map(({ url }) => url), [`${config.url}/auth/v1/user`, `${config.url}/auth/v1/user`])
+})
+
+test('reports missing public Supabase configuration separately from network failures', async () => {
+  const missing = new SupabaseAuthClient({ url: '', publishableKey: '' }, { storage: new MemoryStorage(), autoRefresh: false })
+  await assert.rejects(missing.initialize('https://nutri.brainboost3d.com/'), (error: unknown) => {
+    assert.ok(error instanceof SupabaseAuthError)
+    assert.equal(error.code, 'CONFIGURATION')
+    return true
+  })
+  const offline = new SupabaseAuthClient(config, { storage: new MemoryStorage(), autoRefresh: false, fetcher: async () => { throw new TypeError('network') } })
+  await assert.rejects(offline.initialize('https://nutri.brainboost3d.com/?token_hash=invite&type=invite'), (error: unknown) => {
+    assert.ok(error instanceof SupabaseAuthError)
+    assert.equal(error.code, 'NETWORK')
+    assert.match(error.message, /VITE_SUPABASE_URL/)
+    return true
+  })
+})
+
 test('invalid credentials return a generic message without account enumeration', async () => {
   const auth = new SupabaseAuthClient(config, { storage: new MemoryStorage(), autoRefresh: false, fetcher: async () => Response.json({ message: 'specific provider detail' }, { status: 400 }) })
   await assert.rejects(auth.signInWithPassword('unknown@example.test', 'bad'), (error: unknown) => {

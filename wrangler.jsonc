@@ -2,5 +2,12 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "nutri-perso-api",
   "main": "worker/src/index.ts",
-  "compatibility_date": "2025-02-28"
+  "compatibility_date": "2025-02-28",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "nutri.brainboost3d.com/api/*",
+      "zone_name": "brainboost3d.com"
+    }
+  ]
 }

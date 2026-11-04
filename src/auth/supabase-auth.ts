@@ -235,7 +235,7 @@ export class SupabaseAuthClient {
         headers: { apikey: this.config.publishableKey, Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
       })
     } catch {
-      throw new SupabaseAuthError('NETWORK', 'Le service d’authentification est temporairement inaccessible.')
+      throw new SupabaseAuthError('NETWORK', 'Impossible de joindre Supabase Auth depuis ce site. Vérifiez les variables VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY, la connexion réseau et les règles d’origine/CORS du domaine actuel.')
     }
     if (!response.ok) {
       if ((response.status === 400 || response.status === 401) && failureCode === 'SESSION_EXPIRED') {
@@ -327,7 +327,18 @@ export class SupabaseAuthClient {
 
   private authUrl(path: string): string { return `${this.config.url.replace(/\/$/, '')}/auth/v1${path}` }
   private assertConfigured(): void {
-    if (!this.config.url || !this.config.publishableKey) throw new SupabaseAuthError('CONFIGURATION', 'La configuration publique Supabase est absente.')
+    const base = this.config.url.trim()
+    if (!base || !this.config.publishableKey.trim()) {
+      throw new SupabaseAuthError('CONFIGURATION', 'La configuration publique Supabase est absente. Vérifiez VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY dans les variables de build Cloudflare Pages.')
+    }
+    try {
+      const url = new URL(base)
+      if ((url.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(url.hostname)) || (url.pathname !== '/' && url.pathname !== '')) {
+        throw new Error('invalid')
+      }
+    } catch {
+      throw new SupabaseAuthError('CONFIGURATION', 'VITE_SUPABASE_URL doit être l’URL HTTPS racine du projet Supabase (ou localhost en développement).')
+    }
   }
   private emit(): void { const state = this.state(); for (const listener of this.listeners) listener(state) }
 }

@@ -43,7 +43,18 @@ Les routes `/api/private/*` exigent un access token Bearer. Le Worker le valide 
 - `GET /api/foods/search?q=lentils` retourne les résultats et nutriments fournis par la recherche USDA.
 - `GET /api/foods/:fdcId` retourne la fiche et les nutriments disponibles, avec une sélection de l’énergie, protéines, glucides, lipides et fibres. Les valeurs et unités USDA sont conservées sans conversion.
 
-En déploiement, configurer `SUPABASE_URL` et `SUPABASE_PUBLISHABLE_KEY` comme variables Worker, puis `FDC_API_KEY` et `SUPABASE_SECRET_KEY` comme secrets (`npx wrangler secret put <NOM>`). Fournir au build PWA `VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY`. Ne pas placer de secret de production dans le code, le frontend, ni dans un fichier suivi par Git. La clé Supabase secrète contourne RLS; seul le code Worker de confiance peut l’utiliser.
+En production, Wrangler route `nutri.brainboost3d.com/api/*` vers le Worker et laisse les autres chemins au site Pages. Les appels PWA restent relatifs (`/api/...`) : ils utilisent le domaine courant, sans URL d'API Vite ni configuration CORS. Le proxy Vite vers `127.0.0.1:8787` est réservé au développement local.
+
+Configurer dans **Workers & Pages → nutri-perso-api → Settings → Variables and Secrets** les variables Worker `SUPABASE_URL` et `SUPABASE_PUBLISHABLE_KEY`, et les secrets Worker `FDC_API_KEY` et `SUPABASE_SECRET_KEY`. Les deux valeurs publiques `VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY` doivent être configurées séparément dans les variables d'environnement de build du projet Cloudflare Pages. Ne jamais définir `SUPABASE_SECRET_KEY` ou `FDC_API_KEY` avec le préfixe `VITE_`. La clé Supabase secrète contourne RLS; seul le code Worker de confiance peut l’utiliser.
+
+Pour créer ou mettre à jour les secrets du Worker depuis le dépôt, Wrangler demande chaque valeur de façon interactive :
+
+```sh
+npx wrangler secret put FDC_API_KEY --config wrangler.jsonc
+npx wrangler secret put SUPABASE_SECRET_KEY --config wrangler.jsonc
+```
+
+Les secrets ne sont pas stockés dans `wrangler.jsonc` ni transmis en argument de commande. Le routage configuré requiert que `brainboost3d.com` soit une zone Cloudflare accessible au compte de déploiement et que `nutri.brainboost3d.com` possède un enregistrement DNS proxifié existant.
 
 ## Vérifications et déploiement
 
@@ -53,4 +64,4 @@ npm run build
 npm run worker:deploy
 ```
 
-Le build TypeScript vérifie aussi les types du Worker. Les tests couvrent les réponses, unités, erreurs normalisées et l’absence de fuite de clé.
+Le build TypeScript vérifie aussi les types du Worker. Les tests couvrent les réponses, unités, erreurs normalisées et l’absence de fuite de clé. Après le premier déploiement, vérifier dans Cloudflare que la route `nutri.brainboost3d.com/api/*` est active et que les quatre variables/secrets Worker sont configurés. Aucun réglage CORS n'est requis pour les appels PWA de même origine.
