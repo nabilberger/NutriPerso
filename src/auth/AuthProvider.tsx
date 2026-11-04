@@ -86,7 +86,7 @@ function SignInForm() {
 
 function PasswordSetupForm({ flow }: { readonly flow: PasswordSetupFlow }) {
   const { setPassword, error } = useAuth()
-  const [password, setPassword] = useState('')
+  const [password, setPasswordInput] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [message, setMessage] = useState('')
   const [pending, setPending] = useState(false)
@@ -102,7 +102,7 @@ function PasswordSetupForm({ flow }: { readonly flow: PasswordSetupFlow }) {
     <span className="auth-mark">✦</span><small>{flow === 'invite' ? 'INVITATION ACCEPTÉE' : 'RÉINITIALISATION DU MOT DE PASSE'}</small><h1>Choisissez {flow === 'invite' ? 'votre' : 'un nouveau'} <em>mot de passe.</em></h1>
     <p>{flow === 'invite' ? 'Votre compte invité est prêt. Définissez un mot de passe pour vos prochaines connexions.' : 'Définissez un nouveau mot de passe pour accéder à votre compte.'}</p>
     <form onSubmit={submit}>
-      <label>Nouveau mot de passe<input type="password" autoComplete="new-password" minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+      <label>Nouveau mot de passe<input type="password" autoComplete="new-password" minLength={8} required value={password} onChange={(event) => setPasswordInput(event.target.value)} /></label>
       <label>Confirmer le mot de passe<input type="password" autoComplete="new-password" minLength={8} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
       {(error || message) && <div className="auth-error" role="alert">{error ?? message}</div>}
       <button type="submit" disabled={pending}>{pending ? 'Enregistrement…' : 'Enregistrer le mot de passe'}</button>
