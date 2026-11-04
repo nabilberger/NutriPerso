@@ -23,3 +23,21 @@ create policy user_profiles_insert on public.user_profiles for insert to authent
 create policy user_profiles_update on public.user_profiles for update to authenticated using ((select auth.uid())=user_id) with check ((select auth.uid())=user_id);
 revoke all on public.user_profiles from public, anon;
 grant select, insert, update on public.user_profiles to service_role;
+
+-- Immutable identifiers, editable measurement values; private to the authenticated account.
+create table public.body_measurements (
+  id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  measured_on date not null,
+  weight_kg numeric(6,1) not null check(weight_kg between 25 and 350),
+  note text not null default '' check (char_length(note)<=300),
+  created_at timestamptz not null default now()
+);
+create index body_measurements_owner_date_idx on public.body_measurements(user_id,measured_on desc,created_at desc);
+alter table public.body_measurements enable row level security;
+create policy body_measurements_select on public.body_measurements for select to authenticated using ((select auth.uid())=user_id);
+create policy body_measurements_insert on public.body_measurements for insert to authenticated with check ((select auth.uid())=user_id);
+create policy body_measurements_update on public.body_measurements for update to authenticated using ((select auth.uid())=user_id) with check ((select auth.uid())=user_id);
+create policy body_measurements_delete on public.body_measurements for delete to authenticated using ((select auth.uid())=user_id);
+revoke all on public.body_measurements from public, anon;
+grant select, insert, update, delete on public.body_measurements to service_role;
