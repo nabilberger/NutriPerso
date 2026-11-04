@@ -10,6 +10,7 @@ import type { RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
 import { getJournalPersistence, JournalPersistenceError, saveJournalDayDraft } from './supabase-journal.ts'
 import type { JournalDayDraft } from '../../src/domain/nutrition/journal.ts'
 import { getProfile, saveProfile, ProfileError } from './supabase-profile.ts'
+import {listMeasurements, addMeasurement, deleteMeasurement} from './supabase-measurements.ts'
 
 type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv
 type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
@@ -82,6 +83,21 @@ app.get('/api/foods/:fdcId', async (c) => {
     const detail = mapDetailFood(payload)
     return c.json({ ...detail, keyNutrients: selectKeyNutrients(detail.nutrients) })
   } catch (error) { return respondWithError(c, error) }
+})
+
+app.get('/api/private/measurements', async (c) => {
+  try {return c.json({measurements:await listMeasurements(c.env,c.get('userScope').userId,fetcher)})}
+  catch(error){return respondProfileError(c,error)}
+})
+app.post('/api/private/measurements', async (c) => {
+  let input:unknown
+  try {input=await c.req.json()} catch{return c.json({error:{code:'INVALID_MEASUREMENT',message:'Une mesure JSON est attendue.'}},400)}
+  try {return c.json({measurement:await addMeasurement(c.env,c.get('userScope').userId,input,fetcher)},201)}
+  catch(error){return respondProfileError(c,error)}
+})
+app.delete('/api/private/measurements/:id', async (c) => {
+  try {await deleteMeasurement(c.env,c.get('userScope').userId,c.req.param('id'),fetcher);return c.body(null,204)}
+  catch(error){return respondProfileError(c,error)}
 })
 
 app.get('/api/private/profile', async (c) => {
