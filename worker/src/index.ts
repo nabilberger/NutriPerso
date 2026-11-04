@@ -9,6 +9,7 @@ import { getRecipePersistence, listRecipeDrafts, RecipePersistenceError, saveRec
 import type { RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
 import { getJournalPersistence, JournalPersistenceError, saveJournalDayDraft } from './supabase-journal.ts'
 import type { JournalDayDraft } from '../../src/domain/nutrition/journal.ts'
+import { getProfile, saveProfile, ProfileError } from './supabase-profile.ts'
 
 type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv
 type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
@@ -83,6 +84,19 @@ app.get('/api/foods/:fdcId', async (c) => {
   } catch (error) { return respondWithError(c, error) }
 })
 
+app.get('/api/private/profile', async (c) => {
+  try { return c.json({ profile: await getProfile(c.env, c.get('userScope').userId, fetcher) }) }
+  catch (error) { return respondProfileError(c, error) }
+})
+
+app.put('/api/private/profile', async (c) => {
+  let payload: unknown
+  try { payload = await c.req.json() }
+  catch { return c.json({ error: { code: 'INVALID_PROFILE', message: 'Le profil doit être un objet JSON.' } }, 400) }
+  try { return c.json({ profile: await saveProfile(c.env, c.get('userScope').userId, payload, fetcher) }) }
+  catch (error) { return respondProfileError(c, error) }
+})
+
 app.get('/api/private/session', (c) => {
   const { userId, email } = c.get('userScope')
   return c.json({ user: { id: userId, email } })
@@ -154,6 +168,11 @@ function containsUserId(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsUserId)
   if (!isRecord(value)) return false
   return Object.entries(value).some(([key, nested]) => key.replace(/[_-]/g, '').toLowerCase() === 'userid' || containsUserId(nested))
+}
+
+function respondProfileError(c: Context<AppEnv>, error: unknown) {
+  if (error instanceof ProfileError) return c.json({ error: { code: 'PROFILE_ERROR', message: error.message } }, error.status as ContentfulStatusCode)
+  return c.json({ error: { code: 'PROFILE_ERROR', message: 'Le profil est momentanément indisponible.' } }, 502)
 }
 
 function respondPersistenceError(c: Context<AppEnv>, error: unknown) {
