@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "worker:dev": "wrangler dev --config wrangler.jsonc",
-    "test": "tsx --test worker/test/usda.test.ts worker/test/supabase-catalog.test.ts worker/test/supabase-recipes.test.ts worker/test/supabase-journal.test.ts worker/test/exact-json.test.ts worker/test/nutrition-domain.test.ts worker/test/nutrition-recipes.test.ts worker/test/nutrition-journal.test.ts worker/test/auth-client.test.ts worker/test/auth-worker.test.ts worker/test/supabase-profile.test.ts",
+    "test": "tsx --test worker/test/usda.test.ts worker/test/supabase-catalog.test.ts worker/test/supabase-recipes.test.ts worker/test/supabase-journal.test.ts worker/test/exact-json.test.ts worker/test/nutrition-domain.test.ts worker/test/nutrition-recipes.test.ts worker/test/nutrition-journal.test.ts worker/test/auth-client.test.ts worker/test/auth-worker.test.ts worker/test/supabase-profile.test.ts worker/test/supabase-measurements.test.ts",
     "worker:deploy": "wrangler deploy --config wrangler.jsonc"
   },
   "dependencies": {
