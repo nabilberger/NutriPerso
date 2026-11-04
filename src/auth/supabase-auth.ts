@@ -5,7 +5,8 @@ export type AuthSession = {
   readonly expires_at: number
   readonly user: AuthUser
 }
-export type AuthState = { readonly session: AuthSession | null; readonly invitationPending: boolean }
+export type PasswordSetupFlow = 'invite' | 'recovery'
+export type AuthState = { readonly session: AuthSession | null; readonly passwordSetupFlow: PasswordSetupFlow | null }
 export type AuthErrorCode = 'CONFIGURATION' | 'AUTHENTICATION_FAILED' | 'SESSION_EXPIRED' | 'NETWORK' | 'INVALID_RESPONSE'
 
 export class SupabaseAuthError extends Error {
@@ -19,17 +20,18 @@ export class SupabaseAuthError extends Error {
 }
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
-type Runtime = { readonly storage?: StorageLike; readonly fetcher?: typeof fetch; readonly now?: () => number; readonly autoRefresh?: boolean }
+type Runtime = { readonly storage?: StorageLike; readonly fetcher?: typeof fetch; readonly now?: () => number; readonly autoRefresh?: boolean; readonly replaceUrl?: (url: string) => void }
 type SupabaseConfig = { readonly url: string; readonly publishableKey: string }
 type JsonRecord = Record<string, unknown>
 
 const SESSION_KEY = 'nutrip.auth.session.v1'
+const PASSWORD_SETUP_FLOW_KEY = 'nutrip.auth.password-setup-flow.v1'
 const REFRESH_MARGIN_SECONDS = 60
 
 /** Minimal browser Auth client using Supabase Auth's documented HTTP endpoints. */
 export class SupabaseAuthClient {
   private session: AuthSession | null = null
-  private invitationPending = false
+  private passwordSetupFlow: PasswordSetupFlow | null = null
   private initialized = false
   private initializeInFlight: Promise<AuthSession | null> | null = null
   private refreshInFlight: Promise<AuthSession> | null = null
@@ -53,7 +55,7 @@ export class SupabaseAuthClient {
     return () => this.listeners.delete(listener)
   }
 
-  state(): AuthState { return { session: this.session, invitationPending: this.invitationPending } }
+  state(): AuthState { return { session: this.session, passwordSetupFlow: this.passwordSetupFlow } }
 
   initialize(callbackUrl?: string): Promise<AuthSession | null> {
     if (this.initialized && !callbackUrl) return this.getSession()
@@ -72,17 +74,18 @@ export class SupabaseAuthClient {
     this.assertConfigured()
     const callback = callbackUrl ?? (typeof window !== 'undefined' ? window.location.href : undefined)
     if (callback) {
-      const invitation = await this.consumeInvitation(callback)
-      if (invitation) {
+      const callbackSession = await this.consumeAuthCallback(callback)
+      if (callbackSession) {
         this.initialized = true
-        this.invitationPending = true
-        this.setSession(invitation)
+        this.passwordSetupFlow = callbackSession.flow
+        this.setSession(callbackSession.session)
         this.replaceCallbackUrl(callback)
         this.emit()
-        return invitation
+        return callbackSession.session
       }
     }
     this.initialized = true
+    this.passwordSetupFlow = this.readPasswordSetupFlow()
     const stored = this.readStoredSession()
     if (!stored) {
       this.clearSession()
@@ -110,7 +113,7 @@ export class SupabaseAuthClient {
       method: 'POST', body: JSON.stringify({ email: cleanEmail, password }),
     }, 'AUTHENTICATION_FAILED')
     const session = this.parseSession(payload)
-    this.invitationPending = false
+    this.passwordSetupFlow = null
     this.initialized = true
     this.setSession(session)
     return session
@@ -126,14 +129,15 @@ export class SupabaseAuthClient {
     finally { this.clearSession() }
   }
 
-  async setInvitedUserPassword(password: string): Promise<void> {
-    if (!this.session || !this.invitationPending) throw new SupabaseAuthError('SESSION_EXPIRED', 'Le lien d’invitation n’est plus actif.')
+  async setPassword(password: string): Promise<void> {
+    if (!this.session || !this.passwordSetupFlow) throw new SupabaseAuthError('SESSION_EXPIRED', 'Le lien d’activation ou de récupération n’est plus actif.')
     if (password.length < 8) throw new SupabaseAuthError('AUTHENTICATION_FAILED', 'Le mot de passe doit contenir au moins 8 caractères.')
     await this.authJson('/user', {
       method: 'PUT', headers: { Authorization: `Bearer ${this.session.access_token}` },
       body: JSON.stringify({ password }),
     }, 'SESSION_EXPIRED')
-    this.invitationPending = false
+    this.passwordSetupFlow = null
+    try { this.storage()?.removeItem(PASSWORD_SETUP_FLOW_KEY) } catch { /* The password is already updated; the in-memory state is authoritative. */ }
     this.emit()
   }
 
@@ -193,35 +197,61 @@ export class SupabaseAuthClient {
     finally { this.refreshInFlight = null }
   }
 
-  private async consumeInvitation(callbackUrl: string): Promise<AuthSession | null> {
+  private async consumeAuthCallback(callbackUrl: string): Promise<{ readonly session: AuthSession; readonly flow: PasswordSetupFlow } | null> {
     let url: URL
     try { url = new URL(callbackUrl) } catch { return null }
     const hash = new URLSearchParams(url.hash.replace(/^#/, ''))
-    const queryType = url.searchParams.get('type')
-    const hashType = hash.get('type')
-    const tokenHash = url.searchParams.get('token_hash')
-    if (tokenHash && queryType === 'invite') {
-      const payload = await this.authJson('/verify', {
-        method: 'POST', body: JSON.stringify({ token_hash: tokenHash, type: 'invite' }),
-      }, 'AUTHENTICATION_FAILED')
-      return this.parseSession(payload)
+    const flow = parsePasswordSetupFlow(url.searchParams.get('type') ?? hash.get('type'))
+    const callbackError = url.searchParams.get('error_code') ?? hash.get('error_code') ?? url.searchParams.get('error') ?? hash.get('error')
+    if (callbackError) {
+      const expired = callbackError === 'otp_expired'
+      throw new SupabaseAuthError('AUTHENTICATION_FAILED', expired
+        ? 'Ce lien a expiré. Demandez une nouvelle invitation ou un nouveau lien de réinitialisation.'
+        : 'Ce lien de compte est invalide. Demandez un nouveau lien de réinitialisation ou une nouvelle invitation.')
     }
-    const accessToken = hash.get('access_token')
-    const refreshToken = hash.get('refresh_token')
-    const expiresIn = Number(hash.get('expires_in'))
-    if (hashType !== 'invite' || !accessToken || !refreshToken || !Number.isSafeInteger(expiresIn) || expiresIn <= 0) return null
+    if (!flow) return null
+    const tokenHash = url.searchParams.get('token_hash') ?? hash.get('token_hash')
+    if (tokenHash) {
+      const payload = await this.authJson('/verify', {
+        method: 'POST', body: JSON.stringify({ token_hash: tokenHash, type: flow }),
+      }, 'AUTHENTICATION_FAILED')
+      return { session: this.parseSession(payload), flow }
+    }
+    const accessToken = hash.get('access_token') ?? url.searchParams.get('access_token')
+    const refreshToken = hash.get('refresh_token') ?? url.searchParams.get('refresh_token')
+    const expiresAtValue = hash.get('expires_at') ?? url.searchParams.get('expires_at')
+    const expiresIn = parsePositiveInteger(hash.get('expires_in') ?? url.searchParams.get('expires_in'))
+    const explicitExpiresAt = parsePositiveInteger(expiresAtValue)
+    const expiresAt = explicitExpiresAt ?? (expiresIn === null ? null : Math.floor(this.now() / 1000) + expiresIn)
+    if (!accessToken || !refreshToken || expiresAt === null || expiresAt <= Math.floor(this.now() / 1000)) return null
     const userPayload = await this.authJson('/user', {
       method: 'GET', headers: { Authorization: `Bearer ${accessToken}` },
     }, 'AUTHENTICATION_FAILED')
     const user = parseUser(userPayload)
-    return { access_token: accessToken, refresh_token: refreshToken, expires_at: Math.floor(this.now() / 1000) + expiresIn, user }
+    return { session: { access_token: accessToken, refresh_token: refreshToken, expires_at: expiresAt, user }, flow }
   }
 
   private replaceCallbackUrl(callbackUrl: string): void {
-    if (typeof window === 'undefined') return
     const url = new URL(callbackUrl)
     url.searchParams.delete('token_hash')
+    url.searchParams.delete('token')
+    url.searchParams.delete('code')
+    url.searchParams.delete('access_token')
+    url.searchParams.delete('refresh_token')
+    url.searchParams.delete('expires_in')
+    url.searchParams.delete('expires_at')
+    url.searchParams.delete('token_type')
+    url.searchParams.delete('error')
+    url.searchParams.delete('error_code')
+    url.searchParams.delete('error_description')
     if (url.searchParams.get('type') === 'invite') url.searchParams.delete('type')
+    if (url.searchParams.get('type') === 'recovery') url.searchParams.delete('type')
+    const cleanUrl = `${url.pathname}${url.search}`
+    if (this.runtime.replaceUrl) {
+      this.runtime.replaceUrl(cleanUrl)
+      return
+    }
+    if (typeof window === 'undefined' || typeof document === 'undefined') return
     url.hash = ''
     window.history.replaceState({}, document.title, `${url.pathname}${url.search}`)
   }
@@ -241,7 +271,13 @@ export class SupabaseAuthClient {
       if ((response.status === 400 || response.status === 401) && failureCode === 'SESSION_EXPIRED') {
         throw new SupabaseAuthError('SESSION_EXPIRED', 'La session a expiré. Connectez-vous à nouveau.')
       }
-      if (failureCode === 'AUTHENTICATION_FAILED') throw new SupabaseAuthError('AUTHENTICATION_FAILED', 'Identifiants invalides ou invitation expirée.')
+      if (failureCode === 'AUTHENTICATION_FAILED') {
+        const payload = await response.json().catch(() => null) as unknown
+        if (isRecord(payload) && (payload.code === 'otp_expired' || payload.error_code === 'otp_expired')) {
+          throw new SupabaseAuthError('AUTHENTICATION_FAILED', 'Ce lien a expiré. Demandez une nouvelle invitation ou un nouveau lien de réinitialisation.')
+        }
+        throw new SupabaseAuthError('AUTHENTICATION_FAILED', 'Identifiants invalides ou lien de compte expiré.')
+      }
       throw new SupabaseAuthError('NETWORK', 'Le service d’authentification a refusé la requête.')
     }
     try { return await response.json() as unknown }
@@ -271,6 +307,13 @@ export class SupabaseAuthClient {
     } catch { return null }
   }
 
+  private readPasswordSetupFlow(): PasswordSetupFlow | null {
+    try {
+      const value = this.storage()?.getItem(PASSWORD_SETUP_FLOW_KEY)
+      return value === 'invite' || value === 'recovery' ? value : null
+    } catch { return null }
+  }
+
   private parseStoredSession(value: JsonRecord): AuthSession {
     if (typeof value.access_token !== 'string' || typeof value.refresh_token !== 'string'
       || typeof value.expires_at !== 'number' || !Number.isSafeInteger(value.expires_at)) throw new Error('invalid')
@@ -280,16 +323,21 @@ export class SupabaseAuthClient {
   private setSession(session: AuthSession): void {
     this.session = session
     try { this.storage()?.setItem(SESSION_KEY, JSON.stringify(session)) } catch { /* Keep the session in memory if browser storage is unavailable. */ }
+    try {
+      if (this.passwordSetupFlow) this.storage()?.setItem(PASSWORD_SETUP_FLOW_KEY, this.passwordSetupFlow)
+      else this.storage()?.removeItem(PASSWORD_SETUP_FLOW_KEY)
+    } catch { /* Keep the flow in memory if browser storage is unavailable. */ }
     this.scheduleRefresh()
     this.emit()
   }
 
   private clearSession(): void {
     this.session = null
-    this.invitationPending = false
+    this.passwordSetupFlow = null
     if (this.refreshTimer !== null) clearTimeout(this.refreshTimer)
     this.refreshTimer = null
     try { this.storage()?.removeItem(SESSION_KEY) } catch { /* The in-memory session is still cleared. */ }
+    try { this.storage()?.removeItem(PASSWORD_SETUP_FLOW_KEY) } catch { /* The in-memory flow is still cleared. */ }
     this.emit()
   }
 
@@ -353,3 +401,9 @@ function parseUser(value: unknown): AuthUser {
 
 function isRecord(value: unknown): value is JsonRecord { return typeof value === 'object' && value !== null && !Array.isArray(value) }
 function isUuid(value: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) }
+function parsePasswordSetupFlow(value: string | null): PasswordSetupFlow | null { return value === 'invite' || value === 'recovery' ? value : null }
+function parsePositiveInteger(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}

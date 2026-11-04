@@ -1,19 +1,19 @@
 import { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { authClient } from './client'
-import type { AuthSession, AuthState } from './supabase-auth'
+import type { AuthSession, AuthState, PasswordSetupFlow } from './supabase-auth'
 
 type AuthContextValue = AuthState & {
   readonly loading: boolean
   readonly error: string | null
   signIn(email: string, password: string): Promise<void>
   signOut(): Promise<void>
-  setInvitedUserPassword(password: string): Promise<void>
+  setPassword(password: string): Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { readonly children: ReactNode }) {
-  const [auth, setAuth] = useState<AuthState>({ session: null, invitationPending: false })
+  const [auth, setAuth] = useState<AuthState>({ session: null, passwordSetupFlow: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -22,7 +22,7 @@ export function AuthProvider({ children }: { readonly children: ReactNode }) {
     void authClient.initialize().catch((reason: unknown) => setError(errorMessage(reason))).finally(() => setLoading(false))
     const resume = () => {
       if (document.visibilityState === 'visible') void authClient.getSession().then((session) => {
-        if (!session) setAuth({ session: null, invitationPending: false })
+        if (!session) setAuth({ session: null, passwordSetupFlow: null })
       }).catch((reason: unknown) => setError(errorMessage(reason)))
     }
     document.addEventListener('visibilitychange', resume)
@@ -37,9 +37,9 @@ export function AuthProvider({ children }: { readonly children: ReactNode }) {
       catch (reason) { setError(errorMessage(reason)); throw reason }
     },
     async signOut() { setError(null); await authClient.signOut() },
-    async setInvitedUserPassword(password) {
+    async setPassword(password) {
       setError(null)
-      try { await authClient.setInvitedUserPassword(password) }
+      try { await authClient.setPassword(password) }
       catch (reason) { setError(errorMessage(reason)); throw reason }
     },
   }), [auth, loading, error])
@@ -56,7 +56,7 @@ export function useAuth(): AuthContextValue {
 export function AuthGate({ children }: { readonly children: (session: AuthSession) => ReactNode }) {
   const auth = useAuth()
   if (auth.loading) return <AuthMessage>Restauration de la session…</AuthMessage>
-  if (auth.invitationPending && auth.session) return <InvitePasswordForm />
+  if (auth.passwordSetupFlow && auth.session) return <PasswordSetupForm flow={auth.passwordSetupFlow} />
   if (!auth.session) return <SignInForm />
   return <>{children(auth.session)}</>
 }
@@ -84,8 +84,8 @@ function SignInForm() {
   </AuthShell>
 }
 
-function InvitePasswordForm() {
-  const { setInvitedUserPassword, error } = useAuth()
+function PasswordSetupForm({ flow }: { readonly flow: PasswordSetupFlow }) {
+  const { setPassword, error } = useAuth()
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [message, setMessage] = useState('')
@@ -94,13 +94,13 @@ function InvitePasswordForm() {
     event.preventDefault()
     if (password !== confirmation) { setMessage('Les deux mots de passe ne correspondent pas.'); return }
     setPending(true); setMessage('')
-    try { await setInvitedUserPassword(password) }
+    try { await setPassword(password) }
     catch { /* The provider displays a safe generic error. */ }
     finally { setPending(false) }
   }
   return <AuthShell>
-    <span className="auth-mark">✦</span><small>INVITATION ACCEPTÉE</small><h1>Choisissez votre <em>mot de passe.</em></h1>
-    <p>Votre compte invité est prêt. Définissez un mot de passe pour vos prochaines connexions.</p>
+    <span className="auth-mark">✦</span><small>{flow === 'invite' ? 'INVITATION ACCEPTÉE' : 'RÉINITIALISATION DU MOT DE PASSE'}</small><h1>Choisissez {flow === 'invite' ? 'votre' : 'un nouveau'} <em>mot de passe.</em></h1>
+    <p>{flow === 'invite' ? 'Votre compte invité est prêt. Définissez un mot de passe pour vos prochaines connexions.' : 'Définissez un nouveau mot de passe pour accéder à votre compte.'}</p>
     <form onSubmit={submit}>
       <label>Nouveau mot de passe<input type="password" autoComplete="new-password" minLength={8} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
       <label>Confirmer le mot de passe<input type="password" autoComplete="new-password" minLength={8} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>

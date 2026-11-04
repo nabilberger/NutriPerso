@@ -26,6 +26,7 @@ test('sign in persists an invited account session without a public signup method
   } })
   await auth.signInWithPassword('invited@example.test', 'passphrase')
   assert.equal(calls[0]?.url, `${config.url}/auth/v1/token?grant_type=password`)
+  assert.equal(auth.state().passwordSetupFlow, null)
   assert.equal(new Headers(calls[0]?.init.headers).get('apikey'), config.publishableKey)
   assert.deepEqual(JSON.parse(storage.values.get('nutrip.auth.session.v1') ?? 'null'), {
     access_token: 'access-1', refresh_token: 'refresh-1', expires_at: 1_800_003_600, user: { id: userId, email: 'invited@example.test' },
@@ -85,7 +86,11 @@ test('an invalid refresh token clears the expired local session', async () => {
 test('accepts an invitation callback and allows the invited user to set a password', async () => {
   const storage = new MemoryStorage()
   const calls: string[] = []
-  const auth = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, fetcher: async (input, init = {}) => {
+  const replacements: string[] = []
+  const auth = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, replaceUrl: (url) => {
+    assert.notEqual(storage.getItem('nutrip.auth.session.v1'), null)
+    replacements.push(url)
+  }, fetcher: async (input, init = {}) => {
     const url = String(input); calls.push(url)
     if (url.endsWith('/verify')) return Response.json(session('invite-access', 'invite-refresh'))
     if (url.endsWith('/user') && init.method === 'PUT') return Response.json({ id: userId })
@@ -95,10 +100,13 @@ test('accepts an invitation callback and allows the invited user to set a passwo
   const [restored, restoredAgain] = await Promise.all([auth.initialize(callbackUrl), auth.initialize(callbackUrl)])
   assert.equal(restored?.access_token, 'invite-access')
   assert.deepEqual(restoredAgain, restored)
-  assert.equal(auth.state().invitationPending, true)
-  await auth.setInvitedUserPassword('a-secure-passphrase')
+  assert.equal(auth.state().passwordSetupFlow, 'invite')
+  assert.deepEqual(replacements, ['/'])
+  assert.equal(storage.getItem('nutrip.auth.password-setup-flow.v1'), 'invite')
+  await auth.setPassword('a-secure-passphrase')
   assert.deepEqual(calls, [`${config.url}/auth/v1/verify`, `${config.url}/auth/v1/user`])
-  assert.equal(auth.state().invitationPending, false)
+  assert.equal(auth.state().passwordSetupFlow, null)
+  assert.equal(storage.getItem('nutrip.auth.password-setup-flow.v1'), null)
 })
 
 test('accepts the standard invite callback fragment and persists its session before password setup', async () => {
@@ -113,11 +121,11 @@ test('accepts the standard invite callback fragment and persists its session bef
   const callbackUrl = 'https://nutri.brainboost3d.com/#access_token=invite-access&refresh_token=invite-refresh&expires_in=3600&token_type=bearer&type=invite'
   const restored = await auth.initialize(callbackUrl)
   assert.equal(restored?.access_token, 'invite-access')
-  assert.equal(auth.state().invitationPending, true)
+  assert.equal(auth.state().passwordSetupFlow, 'invite')
   assert.equal(storage.getItem('nutrip.auth.session.v1') !== null, true)
   assert.equal(new Headers(calls[0]?.init.headers).get('authorization'), 'Bearer invite-access')
-  await auth.setInvitedUserPassword('a-secure-passphrase')
-  assert.equal(auth.state().invitationPending, false)
+  await auth.setPassword('a-secure-passphrase')
+  assert.equal(auth.state().passwordSetupFlow, null)
   assert.deepEqual(calls.map(({ url }) => url), [`${config.url}/auth/v1/user`, `${config.url}/auth/v1/user`])
 })
 
@@ -135,6 +143,84 @@ test('reports missing public Supabase configuration separately from network fail
     assert.match(error.message, /VITE_SUPABASE_URL/)
     return true
   })
+})
+
+test('accepts a recovery token hash from the query and restores password setup after reload', async () => {
+  const storage = new MemoryStorage()
+  const replacements: string[] = []
+  let verifyBody: Record<string, unknown> | null = null
+  const firstClient = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, replaceUrl: (url) => replacements.push(url), fetcher: async (input, init = {}) => {
+    assert.equal(String(input), `${config.url}/auth/v1/verify`)
+    verifyBody = JSON.parse(String(init.body)) as Record<string, unknown>
+    return Response.json(session('recovery-access', 'recovery-refresh'))
+  } })
+  const restored = await firstClient.initialize('https://nutri.brainboost3d.com/reset?next=%2Fhome&token_hash=recovery-hash&type=recovery')
+  assert.equal(restored?.access_token, 'recovery-access')
+  assert.deepEqual(verifyBody, { token_hash: 'recovery-hash', type: 'recovery' })
+  assert.equal(firstClient.state().passwordSetupFlow, 'recovery')
+  assert.equal(storage.getItem('nutrip.auth.password-setup-flow.v1'), 'recovery')
+  assert.deepEqual(replacements, ['/reset?next=%2Fhome'])
+
+  const secondClient = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, fetcher: async (_input, init = {}) => {
+    assert.equal(init.method, 'PUT')
+    return Response.json({ id: userId })
+  } })
+  await secondClient.initialize()
+  assert.equal(secondClient.state().session?.access_token, 'recovery-access')
+  assert.equal(secondClient.state().passwordSetupFlow, 'recovery')
+  await secondClient.setPassword('a-new-secure-passphrase')
+  assert.equal(secondClient.state().passwordSetupFlow, null)
+  assert.equal(storage.getItem('nutrip.auth.password-setup-flow.v1'), null)
+})
+
+test('accepts a recovery session from URL fragments and keeps the recovery form active', async () => {
+  const auth = new SupabaseAuthClient(config, { storage: new MemoryStorage(), now, autoRefresh: false, fetcher: async (input) => {
+    assert.equal(String(input), `${config.url}/auth/v1/user`)
+    return Response.json({ id: userId, email: 'invited@example.test' })
+  } })
+  const callbackUrl = 'https://nutri.brainboost3d.com/#access_token=recovery-access&refresh_token=recovery-refresh&expires_in=3600&type=recovery'
+  const restored = await auth.initialize(callbackUrl)
+  assert.equal(restored?.access_token, 'recovery-access')
+  assert.equal(auth.state().passwordSetupFlow, 'recovery')
+})
+
+test('accepts recovery session tokens in the query string and removes them only after validation', async () => {
+  const storage = new MemoryStorage()
+  const replacements: string[] = []
+  const auth = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, replaceUrl: (url) => replacements.push(url), fetcher: async (input, init = {}) => {
+    assert.equal(String(input), `${config.url}/auth/v1/user`)
+    assert.equal(new Headers(init.headers).get('authorization'), 'Bearer recovery-query-access')
+    return Response.json({ id: userId, email: 'invited@example.test' })
+  } })
+  const callbackUrl = 'https://nutri.brainboost3d.com/?access_token=recovery-query-access&refresh_token=recovery-query-refresh&expires_in=3600&type=recovery&return=%2F'
+  const restored = await auth.initialize(callbackUrl)
+  assert.equal(restored?.access_token, 'recovery-query-access')
+  assert.equal(auth.state().passwordSetupFlow, 'recovery')
+  assert.deepEqual(replacements, ['/?return=%2F'])
+})
+
+test('an otp_expired recovery response does not create a session or clean the callback URL', async () => {
+  const storage = new MemoryStorage()
+  const replacements: string[] = []
+  const auth = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, replaceUrl: (url) => replacements.push(url), fetcher: async () => Response.json({ code: 'otp_expired' }, { status: 403 }) })
+  await assert.rejects(auth.initialize('https://nutri.brainboost3d.com/?token_hash=expired&type=recovery'), (error: unknown) => {
+    assert.ok(error instanceof SupabaseAuthError)
+    assert.equal(error.code, 'AUTHENTICATION_FAILED')
+    assert.match(error.message, /Ce lien a expiré/)
+    return true
+  })
+  assert.equal(storage.getItem('nutrip.auth.session.v1'), null)
+  assert.equal(storage.getItem('nutrip.auth.password-setup-flow.v1'), null)
+  assert.deepEqual(replacements, [])
+})
+
+test('an otp_expired URL callback is reported without cleaning the query or fragment', async () => {
+  const storage = new MemoryStorage()
+  const replacements: string[] = []
+  const auth = new SupabaseAuthClient(config, { storage, now, autoRefresh: false, replaceUrl: (url) => replacements.push(url) })
+  await assert.rejects(auth.initialize('https://nutri.brainboost3d.com/?type=recovery#error=access_denied&error_code=otp_expired'), /Ce lien a expiré/)
+  assert.deepEqual(replacements, [])
+  assert.equal(storage.getItem('nutrip.auth.session.v1'), null)
 })
 
 test('invalid credentials return a generic message without account enumeration', async () => {
