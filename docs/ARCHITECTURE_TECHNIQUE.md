@@ -10,7 +10,7 @@
 - Le backend expose une API HTTP versionnée. Les adaptateurs d’infrastructure sont des bords remplaçables autour des cas d’usage.
 - PostgreSQL standard est la source de vérité après synchronisation. Le navigateur conserve une file d’attente locale pour les écritures hors ligne.
 - Les calculs de nutrition sont déterministes, effectués côté métier à partir de données nutritionnelles structurées et versionnées. Une IA ne fournit que des suggestions structurées à confirmer.
-- L’application reste conçue pour une personne en V1; elle n’introduit ni facturation ni administration commerciale. Les opérations et entités sont toutefois conçues pour ne pas empêcher l’ajout futur d’un propriétaire de données et d’autorisations.
+- NutriPerso accueille plusieurs testeurs invités avec des comptes Supabase Auth et des données personnelles isolées. Le catalogue USDA reste partagé; aucun système de rôles, d’abonnement ou de facturation n’est prévu.
 - La portabilité est obtenue par des contrats stables et des formats standards; elle n’implique pas que chaque service cloud ait un équivalent gratuit identique.
 
 ## 2. Technologies recommandées
@@ -24,14 +24,14 @@
 | État et appels API | TanStack Query pour état serveur et cache; état d’interface local simple | Distingue données serveur et état temporaire. IndexedDB reste la source de la file d’attente, pas le cache mémoire de la bibliothèque. |
 | Backend initial | TypeScript sur Cloudflare Workers avec Hono comme couche HTTP/adaptateur | Choix confirmé pour la V1. Hono porte l’adaptateur HTTP; le code métier ne doit importer ni Hono ni les API `cloudflare:*`. |
 | Backend portable | Même API et mêmes cas d’usage, empaquetables avec un serveur Node LTS (par exemple Fastify) dans Docker | La portabilité du domaine est forte; l’adaptateur HTTP/runtime et les liaisons aux services sont à remplacer et à configurer séparément. Il ne faut pas supposer qu’un Worker est exécutable tel quel dans un conteneur. |
-| Base et accès | PostgreSQL standard; migrations SQL versionnées (outil à valider, proposition : Drizzle Kit ou migrations SQL explicites); accès centralisé dans un adaptateur repository | Sauvegardes logiques et migrations exportables. Limiter les extensions spécifiques à Supabase; SQL PostgreSQL standard d’abord. Supabase peut servir PostgreSQL et éventuellement ses services gérés sans devenir la couche métier. |
-| Connexion Workers → PostgreSQL | Connexion TCP PostgreSQL via Cloudflare Hyperdrive, isolée dans l’adaptateur de base; en Docker, connexion directe/pooler PostgreSQL | Choix retenu pour Workers Free, sous réserve d’un test de connexion avec l’instance Supabase réelle. Hyperdrive est une intégration Cloudflare spécifique, mais l’interface repository et le pilote PostgreSQL ne le sont pas. La configuration change au départ de Cloudflare. Éviter de placer les requêtes dans les handlers. |
+| Base et accès | PostgreSQL standard; migrations SQL versionnées dans `supabase/migrations/` avec Supabase CLI; accès centralisé dans un adaptateur repository | La CLI gère la création et l’ordre des fichiers; le SQL reste PostgreSQL standard et exportable. Limiter les extensions spécifiques à Supabase. Supabase peut servir PostgreSQL sans devenir la couche métier. |
+| Connexion Workers → Supabase | Supabase Data API HTTPS/PostgREST avec `fetch` natif, isolé dans l’adaptateur repository; l’identifiant propriétaire vient du JWT Supabase Auth vérifié par le Worker | Aucun SDK ou pilote PostgreSQL n’est nécessaire pour les données. La clé secrète reste exclusivement côté Worker; le navigateur ne reçoit que la clé publishable. Chaque route personnelle vérifie le Bearer auprès de Supabase Auth puis passe l’identifiant retourné par Auth à l’adaptateur. Le catalogue USDA reste partagé. Hyperdrive n’est pas retenu à ce stade. |
 | Fichiers | Interface `ObjectStorage`; Supabase Storage d’abord; adaptateurs S3 compatibles (R2 ou autre) ensuite | Métadonnées et droits d’accès gérés par l’application; clés d’objet et URLs temporaires masquées derrière le contrat. Aucun URL Supabase persistant dans le domaine. |
 | IA | Interface `AIProvider`; adaptateur Gemini Flash via API serveur et sortie JSON validée | Le contrat NutriPerso décrit tâches, entrées minimales et propositions typées. L’adaptateur traduit vers le fournisseur; les sorties sont validées et traitées comme incertaines. Nom exact de modèle et paramètres restent configurables. |
 | Validation API | Schémas d’entrée/sortie versionnés (par exemple Zod dans l’adaptateur HTTP) | Refuser tôt les formes invalides; séparer DTO, objets métier et modèles SQL. Ne pas faire dépendre le domaine d’une bibliothèque de validation si une validation simple suffit. |
 | Observabilité | Journaux structurés, identifiant de corrélation, mesures techniques sans contenu nutritionnel ou image | Facilite le diagnostic et le changement d’hébergeur. Politique de rétention et niveau de détail à valider. |
 
-**Choix confirmés :** React + Vite + TypeScript, Dexie/IndexedDB, Hono sur Cloudflare Workers et Hyperdrive pour l’accès PostgreSQL depuis Workers Free, après test de connexion avec l’instance Supabase. L’outil de migrations reste à choisir. PostgREST demeure une solution de repli si le test Hyperdrive échoue, au prix d’une dépendance de transport Supabase.
+**Choix confirmés :** React + Vite + TypeScript, Supabase Auth pour les comptes invités, Hono sur Cloudflare Workers, Supabase CLI pour créer et versionner les migrations SQL, et Supabase Data API HTTPS via `fetch` natif depuis le Worker. `SUPABASE_URL` et la clé publishable sont des variables; `SUPABASE_SECRET_KEY` reste un secret Worker. Le frontend reçoit uniquement `VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY`. Hyperdrive n’est pas retenu à ce stade.
 
 ## 3. Architecture générale et communications
 
@@ -48,10 +48,10 @@ Navigateur / PWA
                   │    ├─ Moteur nutritionnel déterministe
                   │    └─ Préparation contrôlée du contexte IA
                   └─ Ports (interfaces)
-                       ├─ Repository PostgreSQL → adaptateur Supabase/Hyperdrive
+                    ├─ Repository PostgreSQL → Supabase Data API HTTPS (fetch Worker)
                        ├─ ObjectStorage → Supabase Storage
                        ├─ AIProvider → Gemini Flash
-                       ├─ IdentityProvider → Supabase Auth (un compte V1)
+                       ├─ IdentityProvider → Supabase Auth (comptes invités)
                        └─ Clock / ID / journal technique
                        └─ adaptateurs ultérieurs Node/Docker et fournisseurs alternatifs
 ```
@@ -128,7 +128,7 @@ Les interfaces ci-dessous définissent les responsabilités, pas le code ni les 
 
 | Port | Responsabilités du contrat | Adaptateur initial / remplacement |
 |---|---|---|
-| `NutritionRepository` | Recherche/lecture d’aliments et valeurs/unités; 20 repas consommés les plus récents et recherche parmi les anciens; agrégations du journal par période sans persistance redondante des totaux; enregistrement explicite du marqueur de journée terminée; transactions explicites | PostgreSQL via Hyperdrive/Supabase, puis tout PostgreSQL standard. Le repository ne retourne pas d’objets Supabase. |
+| `NutritionRepository` | Recherche/lecture d’aliments et valeurs/unités; 20 repas consommés les plus récents et recherche parmi les anciens; agrégations du journal par période sans persistance redondante des totaux; enregistrement explicite du marqueur de journée terminée; transactions explicites | Supabase Data API HTTPS via le Worker en V1; remplacer seulement l’adaptateur pour PostgreSQL standard. Le repository ne retourne pas de réponses PostgREST. |
 | `ProfileRepository` / `EnergyGoalRepository` | Lire/mettre à jour le profil et conserver les objectifs énergétiques avec dates d’effet; correction exceptionnelle d’une date passée | PostgreSQL standard; règles de calcul indépendantes du stockage. |
 | `FastingRepository` | Gérer protocole activé/suspendu, horaires quotidiens, configurations prédéfinies/personnalisées et historique | PostgreSQL standard; horaires variables par jour hors V1. |
 | `ConversationRepository` | Créer/lister/reprendre/supprimer conversations et messages; expiration automatique après 7 jours | PostgreSQL standard et tâche planifiée d’expiration. |
@@ -136,7 +136,7 @@ Les interfaces ci-dessous définissent les responsabilités, pas le code ni les 
 | `DataExport` / `DataDeletion` | Exporter en JSON et CSV les données structurées complètes avec manifeste et associations des fichiers; supprimer après confirmation profil/compte, données, fichiers, caches et sauvegardes contrôlées | Cas d’usage applicatifs coordonnant les repositories, IndexedDB et ObjectStorage. |
 | `ObjectStorage` | `put`, `get`/URL de lecture temporaire, `delete` et suppression à échéance; métadonnées, contrôle type/taille et erreurs normalisées; aucun chemin fournisseur exposé | Supabase Storage, puis S3/R2. Une migration de fichiers copie les octets et remappe les clés. |
 | `AIProvider` | Tâche déclarée (analyse d’image, assistance), historique de conversation fourni par NutriPerso et contexte explicitement sélectionné, sortie NutriPerso structurée, délai/limite, métadonnées d’usage, erreurs normalisées | Gemini Flash, puis autre API ou modèle local. La sélection des données et la validation restent dans l’application. |
-| `IdentityProvider` / `CurrentActor` | Identité opaque et capacités/permissions nécessaires au cas d’usage; aucune dépendance au format JWT d’un seul fournisseur dans le domaine | Supabase Auth pour un seul compte utilisateur en V1; adaptateur isolé, remplaçable ultérieurement par un fournisseur OIDC. |
+| `IdentityProvider` / `CurrentActor` | Identité opaque et capacités/permissions nécessaires au cas d’usage; aucune dépendance au format JWT d’un seul fournisseur dans le domaine | Supabase Auth pour des testeurs invités; les routes Worker dérivent le propriétaire du JWT validé, jamais d’un identifiant fourni par le client. Catalogue USDA partagé. |
 | `Clock` / `IdGenerator` | Heure UTC et identifiants uniques déterministes en test, standards en production | API runtime ou bibliothèque portable; pas d’horloge implicite dans les calculs. |
 | `NutritionSourceImporter` (optionnel) | Import contrôlé d’un catalogue externe avec attribution de source et provenance conservée | Import USDA FoodData Central initial; le téléchargement et ses conditions d’utilisation sont isolés du journal quotidien. |
 
@@ -155,8 +155,8 @@ La précision et les règles d’arrondi sont actées. Les portions domestiques 
 
 ## 7. Sécurité, confidentialité et configuration
 
-- **Authentification V1 :** Supabase Auth avec un seul compte utilisateur. Son intégration est confinée à `IdentityProvider`; le domaine reçoit un acteur opaque et ne dépend ni des JWT ni des SDK Supabase. La validation de session et l’autorisation sont effectuées côté serveur pour chaque requête. L’adaptateur pourra évoluer vers OIDC sans réécrire les cas d’usage.
-- **Autorisation :** contrôler côté serveur chaque opération et chaque objet; ne jamais faire confiance à un identifiant envoyé par le client. Prévoir une notion d’acteur/propriétaire dans l’architecture, sans concevoir aujourd’hui le schéma multi-utilisateur.
+- **Authentification V1 :** Supabase Auth pour plusieurs testeurs invités, sans inscription publique. Désactiver « Allow new users to sign up » dans les réglages Auth du projet et créer les comptes uniquement par invitation depuis un environnement administrateur de confiance ou le Dashboard. La PWA restaure la session et renouvelle les jetons. Le Worker valide chaque access token via l’endpoint utilisateur Supabase Auth et transmet l’identifiant retourné par Auth aux adaptateurs personnels. Le catalogue USDA reste partagé.
+- **Autorisation :** contrôler côté serveur chaque opération et chaque objet; ne jamais faire confiance à un identifiant envoyé par le client. Le JWT vérifié est l’unique source d’identité; les données personnelles restent isolées par utilisateur.
 - **Secrets :** variables et secrets distincts par local/staging/production; gestionnaire de secrets Cloudflare ou variables de déploiement côté VPS. Aucun secret Gemini, stockage privilégié ou base dans le frontend, le dépôt, les journaux ou l’URL. Rotation et procédure de révocation documentées.
 - **API :** HTTPS, validation stricte, limites de taille, types MIME et dimensions pour images, timeouts, limites de fréquence et quotas pour éviter l’abus IA. CORS limité aux origines réelles. Protection contre rejeu par idempotence; erreurs externes normalisées sans message sensible.
 - **Base :** compte d’application au moindre privilège; séparer credentials de migration et d’exécution; TLS; transactions et contraintes PostgreSQL; sauvegarde et essai de restauration. Ne pas exposer le rôle service Supabase au navigateur.
@@ -171,7 +171,7 @@ La précision et les règles d’arrondi sont actées. Les portions domestiques 
 
 1. **Frontend :** build statique React/Vite déployé sur Cloudflare Pages, domaine `nutri.brainboost3d.com` selon la configuration prévue.
 2. **API :** Worker séparé ou projet API attaché au déploiement; secrets par environnement. Éviter de mélanger le code source de l’interface au code métier serveur.
-3. **Données :** Supabase PostgreSQL et Supabase Storage en région choisie explicitement. Accès SQL via adaptateur PostgreSQL/Hyperdrive; vérifier la compatibilité du plan et la configuration effective avant mise en service.
+3. **Données :** Supabase PostgreSQL et Supabase Storage en région choisie explicitement. Le Worker accède aux tables par Supabase Data API HTTPS; les migrations accordent le minimum de droits aux rôles API et activent RLS.
 4. **IA :** Gemini Flash côté serveur; quotas et dépenses surveillés. En cas de panne IA, journal, recettes et saisie manuelle restent disponibles.
 5. **Environnements :** local, préproduction, production séparés autant que possible; aucun test de migration destructive sur la production.
 
@@ -193,7 +193,7 @@ Cloudflare Workers Free annonce une limite de 100 000 requêtes/jour et 10 ms CP
 
 - Les quotas gratuits sont mouvants et peuvent inclure pauses, quotas journaliers ou absence de sauvegardes/garantie; prix nul ne signifie pas service toujours disponible. Coûts possibles : plan Supabase Pro, stockage/egress, Cloudflare paid, domaine, sauvegarde externe, SMTP/notifications, et usage IA payant.
 - Les appels IA sur images et contextes longs sont les plus susceptibles de générer des frais. Réduire image et contexte, limiter tailles/fréquences, journaliser le nombre d’unités sans contenu, rendre les appels explicites, définir un budget/alerte et un mode sans IA.
-- Hyperdrive retire une partie du coût de connexions répétées mais crée une dépendance d’exploitation Cloudflare et doit être validé selon le niveau de service/plans. Un VPS peut exiger gestion TLS, patchs, pare-feu, sauvegardes, supervision et disponibilité; le faible prix mensuel déplace l’effort vers l’exploitation.
+- Le Data API simplifie les appels depuis Workers, mais dépend de l’API REST Supabase et de ses disponibilités/quotas. La clé secrète du Worker contourne RLS; toute route qui l’utilise doit limiter strictement les opérations et valider ses entrées. Un VPS peut exiger gestion TLS, patchs, pare-feu, sauvegardes, supervision et disponibilité; le faible prix mensuel déplace l’effort vers l’exploitation.
 - PWA hors ligne ne garantit pas l’exécution en arrière-plan quand le navigateur est fermé. Les notifications système nécessitent permission utilisateur, HTTPS et prise en charge réelle du navigateur; prévoir les rappels internes comme base fiable.
 - La synchronisation offline soulève des conflits si le même enregistrement est modifié sur plusieurs appareils. La V1 vise un appareil principal; si plusieurs copies modifient le même enregistrement, la dernière modification confirmée par le serveur prévaut, y compris pour une suppression.
 - La reconnaissance de portions depuis une photo reste une estimation visuelle difficile, dépendante de l’angle, des ingrédients cachés et des contenants. La correction et validation humaine sont obligatoires.
@@ -207,9 +207,9 @@ Cloudflare Workers Free annonce une limite de 100 000 requêtes/jour et 10 ms CP
 | Frontend | Vue 3 + Vite | Léger, approche réactive simple, même possibilité PWA/statique | Écosystème et compétences potentiellement moins adaptés à l’équipe; migration ultérieure non gratuite si le choix est mal établi. |
 | Frontend | SvelteKit | Très bon poids client, DX concise | Plus de spécificités de framework; ne justifie pas un rendu serveur pour le périmètre V1. |
 | Backend | Fastify/Node dès le départ sur un VPS Docker | Même runtime que la cible portable; SQL direct et exploitation conventionnelle | Nécessite serveur et opérations dès la V1; moins aligné au déploiement initial Workers et coût/maintenance potentiels. |
-| Backend | Cloudflare Workers + Hono (recommandé) | Déploiement léger, forte adéquation au frontend statique, offre gratuite utilisable à faible trafic | Runtime et limites propres, Hyperdrive et bindings à remplacer pour Docker; ne pas lier le domaine aux API Workers. |
+| Backend | Cloudflare Workers + Hono (recommandé) | Déploiement léger, forte adéquation au frontend statique, offre gratuite utilisable à faible trafic | Runtime et bindings Cloudflare à remplacer pour Docker; ne pas lier le domaine aux API Workers. |
 | Backend | Supabase Edge Functions | Intégration pratique avec Supabase Auth/DB | Accentue la dépendance Supabase; trajectoire vers serveur portable moins directe que des ports indépendants. |
-| Base | Supabase Postgres via API PostgREST | Facile à appeler depuis Workers, gestion REST disponible | API et policies spécifiques, logique/accès potentiellement dispersés, migration SQL et changement d’API plus complexes. |
+| Base | Supabase Postgres via API PostgREST | Retenu : facile à appeler depuis Workers via HTTPS et `fetch` natif | API et permissions spécifiques; garder les requêtes dans un adaptateur pour préserver le domaine et la portabilité. |
 | Base | PostgreSQL sur VPS dès V1 | Contrôle et portabilité opérationnelle | Gestion des sauvegardes, patchs, disponibilité et sécurité à charge de l’utilisateur. |
 | Fichiers | Cloudflare R2 en premier | Compatibilité S3, peut réduire coût d’egress dans certains parcours | Ajouter un compte et une surface opérationnelle; ne résout pas les choix de confidentialité/rétention. |
 | IA | API OpenAI ou autre | Modèles, vision et formats structurés alternatifs | Coût, qualité, disponibilité et règles de traitement différents; nécessite tests comparatifs et adaptateur distinct. |
@@ -221,6 +221,6 @@ Cloudflare Workers Free annonce une limite de 100 000 requêtes/jour et 10 ms CP
 
 Décisions actées : sauvegardes quotidiennes chiffrées sur Supabase et serveur personnel, rétention 30 jours et sauvegarde manuelle; dernière modification confirmée conservée et suppression confirmée prioritaire; catalogue USDA + local + personnalisé; objectifs perte/maintien/prise calculés initialement par Mifflin-St Jeor et modifiables; demandes IA hors ligne conservées jusqu'à relance ou annulation; export JSON/CSV et fichiers en ZIP.
 
-Restent à préciser : outil de migrations et séparation des environnements; validation Hyperdrive/Supabase; formats et taille maximale des photos; détails des portions et densités; processus d'import USDA; comportement du calendrier sans objectif; actions sur les modèles; unités des mesures; historique de jeûne/rappels; notifications app fermée; rétention des données chez Gemini.
+Restent à préciser : séparation des environnements; validation des droits Data API et des requêtes catalogue avec Supabase; formats et taille maximale des photos; détails des portions et densités; processus d'import USDA; comportement du calendrier sans objectif; actions sur les modèles; unités des mesures; historique de jeûne/rappels; notifications app fermée; rétention des données chez Gemini.
 
 L'architecture reste sans schéma ni tables SQL. Le modèle de données décrit séparément entités, relations, contraintes et instantanés métier.

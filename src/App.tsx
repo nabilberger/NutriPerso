@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AuthGate, useAuth } from './auth/AuthProvider'
 
 const sections = [
   { id: 'home', label: 'Vue d’ensemble', icon: '⌂' },
@@ -11,11 +12,16 @@ const sections = [
 type Section = (typeof sections)[number]['id']
 
 export default function App() {
+  return <AuthGate>{(session) => <AuthenticatedApp email={session.user.email} />}</AuthGate>
+}
+
+function AuthenticatedApp({ email }: { readonly email: string | null }) {
+  const { signOut } = useAuth()
   const [active, setActive] = useState<Section>('home')
   const current = sections.find((item) => item.id === active)
   return <div className="shell">
-    <aside className="sidebar"><a className="brand" href="#home" onClick={() => setActive('home')}><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></a><p className="nav-label">ESPACE PERSONNEL</p><nav>{sections.map((item) => <button key={item.id} className={active === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActive(item.id)}><span className="nav-icon">{item.icon}</span>{item.label}{active === item.id && <i />}</button>)}</nav><div className="sidebar-bottom"><div className="aside-note"><span>✧</span><p><b>À votre rythme.</b><br/>Un petit pas compte aussi.</p></div><div className="profile"><span className="avatar">N</span><span><b>Mon espace</b><small>Suivi personnel</small></span><i>···</i></div></div></aside>
-    <main><header className="topbar"><div className="mobile-brand"><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></div><div className="crumb">Mon espace <span>/</span> <b>{current?.label}</b></div><div className="top-actions"><span className="today">Mardi 3 novembre 2026</span><button className="coach-button" type="button" aria-label="Ouvrir Coach IA" onClick={() => setActive('coach')}><span aria-hidden="true">✳</span><b>Coach IA</b></button><button className="bell" aria-label="Notifications">♧<i/></button><span className="avatar small">N</span></div></header>
+    <aside className="sidebar"><a className="brand" href="#home" onClick={() => setActive('home')}><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></a><p className="nav-label">ESPACE PERSONNEL</p><nav>{sections.map((item) => <button key={item.id} className={active === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActive(item.id)}><span className="nav-icon">{item.icon}</span>{item.label}{active === item.id && <i />}</button>)}</nav><div className="sidebar-bottom"><div className="aside-note"><span>✧</span><p><b>À votre rythme.</b><br/>Un petit pas compte aussi.</p></div><div className="profile"><span className="avatar">{email?.slice(0, 1).toUpperCase() ?? 'N'}</span><span><b>{email ?? 'Compte invité'}</b><small>Compte invité</small></span><button className="signout-icon" type="button" onClick={() => void signOut()} aria-label="Se déconnecter" title="Se déconnecter">↗</button></div></div></aside>
+    <main><header className="topbar"><div className="mobile-brand"><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></div><div className="crumb">Mon espace <span>/</span> <b>{current?.label}</b></div><div className="top-actions"><span className="today">Mardi 3 novembre 2026</span><button className="coach-button" type="button" aria-label="Ouvrir Coach IA" onClick={() => setActive('coach')}><span aria-hidden="true">✳</span><b>Coach IA</b></button><button className="signout-button" type="button" onClick={() => void signOut()}>Déconnexion</button><span className="avatar small">{email?.slice(0, 1).toUpperCase() ?? 'N'}</span></div></header>
     {active === 'home' ? <Dashboard navigate={setActive}/> : <section className="placeholder"><span className="placeholder-icon">✳</span><small>NUTRIPERSO</small><h1>{current?.label}</h1><p>Cet espace est prêt à accueillir votre suivi.<br/>Les fonctionnalités arriveront au fil du développement.</p><span className="status"><i/>Espace en préparation</span></section>}
     <footer>NutriPerso <span>·</span> Votre espace, vos repères.</footer></main>
     <nav className="mobile-nav" aria-label="Navigation principale">{[sections[1], sections[2], sections[0], sections[3], sections[4]].map((item) => <button key={item.id} className={`mobile-link${item.id === 'home' ? ' home-link' : ''}${active === item.id ? ' active' : ''}`} onClick={() => setActive(item.id)} aria-current={active === item.id ? 'page' : undefined}><span>{item.icon}</span><small>{item.id === 'home' ? 'Accueil' : item.label}</small></button>)}</nav>

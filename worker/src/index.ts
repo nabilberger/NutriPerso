@@ -1,12 +1,21 @@
 import { Hono } from 'hono'
 import type { Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
+import { importUsdaFood as persistUsdaFood, type SupabaseCatalogEnv, type UsdaFoodDetail } from './supabase-catalog.ts'
+import { parseJsonWithExactNumbers } from './exact-json.ts'
+import { parseDecimal } from '../../src/domain/nutrition/decimal.ts'
+import { validateSupabaseAccessToken, type AuthenticatedUserScope } from './auth.ts'
+import { getRecipePersistence, listRecipeDrafts, RecipePersistenceError, saveRecipeDraft } from './supabase-recipes.ts'
+import type { RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
+import { getJournalPersistence, JournalPersistenceError, saveJournalDayDraft } from './supabase-journal.ts'
+import type { JournalDayDraft } from '../../src/domain/nutrition/journal.ts'
 
-type Bindings = { FDC_API_KEY?: string }
-type AppEnv = { Bindings: Bindings }
+type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv
+type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
 type JsonRecord = Record<string, unknown>
-type NutrientValue = number | string | null
-type FoodNutrient = { id: number | null; name: string; unitName: string; value: NutrientValue }
+type NutrientValue = string
+type NutrientBasis = { quantity: 100; unit: 'g' | 'ml'; source: 'fdc_data_type' | 'fdc_branded_standardization' } | null
+type FoodNutrient = { id: number | null; name: string; unitName: string; value: NutrientValue; basis: NutrientBasis }
 type FdcErrorCode = 'FDC_TIMEOUT' | 'FDC_UNAVAILABLE' | 'FDC_RATE_LIMITED' | 'FDC_REJECTED' | 'FDC_INVALID_RESPONSE' | 'FDC_FOOD_NOT_FOUND'
 
 class FdcError extends Error {
@@ -22,23 +31,44 @@ class FdcError extends Error {
 
 const FDC_API_BASE = 'https://api.nal.usda.gov/fdc/v1'
 const REQUEST_TIMEOUT_MS = 10_000
-const SEARCH_PAGE_SIZE = 25
+const DEFAULT_SEARCH_PAGE_SIZE = 25
+const MAX_SEARCH_PAGE_SIZE = 25
 const KEY_NUTRIENTS = {
   energy: new Set([1008, 2047, 2048]), protein: new Set([1003]),
   carbohydrates: new Set([1005]), fat: new Set([1004]), fiber: new Set([1079]),
 } as const
 
+export function createWorkerApp(dependencies: { readonly fetcher?: typeof fetch } = {}) {
 const app = new Hono<AppEnv>()
+const fetcher = dependencies.fetcher ?? fetch
+
+app.use('/api/private/*', async (c, next) => {
+  c.header('Cache-Control', 'private, no-store')
+  const result = await validateSupabaseAccessToken(c.req.header('Authorization'), c.env, fetcher)
+  if (!result.ok) {
+    const message = result.status === 401 ? 'Une session valide est requise.'
+      : result.status === 403 ? 'Cette session ne peut pas accéder à cet espace.'
+        : 'Le service d’authentification est temporairement indisponible.'
+    return c.json({ error: { code: result.code, message } }, result.status)
+  }
+  c.set('userScope', result.scope)
+  await next()
+})
 
 app.get('/api/foods/search', async (c) => {
   const query = c.req.query('q')?.trim() ?? ''
   if (!query) return c.json({ error: { code: 'QUERY_REQUIRED', message: 'Le paramètre q est requis.' } }, 400)
   if (query.length > 120) return c.json({ error: { code: 'QUERY_TOO_LONG', message: 'La recherche est trop longue.' } }, 400)
+  const page = parsePositiveInteger(c.req.query('page') ?? '1')
+  if (page === null) return c.json({ error: { code: 'INVALID_PAGE', message: 'Le paramètre page doit être un entier positif.' } }, 400)
+  const requestedPageSize = parsePositiveInteger(c.req.query('pageSize') ?? String(DEFAULT_SEARCH_PAGE_SIZE))
+  if (requestedPageSize === null) return c.json({ error: { code: 'INVALID_PAGE_SIZE', message: 'Le paramètre pageSize doit être un entier positif.' } }, 400)
+  const pageSize = Math.min(requestedPageSize, MAX_SEARCH_PAGE_SIZE)
   try {
-    const payload = await requestFdc('/foods/search', c.env.FDC_API_KEY, { query, pageSize: String(SEARCH_PAGE_SIZE) })
+    const payload = await requestFdc('/foods/search', c.env.FDC_API_KEY, { query, pageNumber: String(page), pageSize: String(pageSize) })
     if (!isRecord(payload) || !Array.isArray(payload.foods)) throw new FdcError(502, 'FDC_INVALID_RESPONSE', 'FoodData Central a retourné une réponse invalide.')
-    const foods = payload.foods.filter(isRecord).map(mapSearchFood).filter((food) => food.fdcId !== null)
-    return c.json({ foods, totalHits: finiteNumber(payload.totalHits) ?? foods.length, currentPage: finiteNumber(payload.currentPage) ?? 1, totalPages: finiteNumber(payload.totalPages) ?? (foods.length ? 1 : 0) })
+    const foods = rankSearchFoods(query, deduplicateSearchFoods(payload.foods.filter(isRecord).map(mapSearchFood).filter((food): food is SearchFood => food !== null)))
+    return c.json({ foods, totalHits: finiteNumber(payload.totalHits) ?? foods.length, currentPage: finiteNumber(payload.currentPage) ?? page, totalPages: finiteNumber(payload.totalPages) ?? (foods.length ? page : 0), pageSize })
   } catch (error) { return respondWithError(c, error) }
 })
 
@@ -48,15 +78,111 @@ app.get('/api/foods/:fdcId', async (c) => {
   try {
     const payload = await requestFdc('/food/' + fdcId, c.env.FDC_API_KEY)
     if (!isRecord(payload) || finiteNumber(payload.fdcId) === null) throw new FdcError(502, 'FDC_INVALID_RESPONSE', 'FoodData Central a retourné une réponse invalide.')
-    const nutrients = Array.isArray(payload.foodNutrients) ? payload.foodNutrients.filter(isRecord).map(mapDetailNutrient).filter((nutrient): nutrient is FoodNutrient => nutrient !== null) : []
-    return c.json({ fdcId: finiteNumber(payload.fdcId), description: stringValue(payload.description), dataType: stringValue(payload.dataType), foodCategory: stringValue(payload.foodCategory), brandOwner: stringValue(payload.brandOwner), nutrients, keyNutrients: selectKeyNutrients(nutrients) })
+    const detail = mapDetailFood(payload)
+    return c.json({ ...detail, keyNutrients: selectKeyNutrients(detail.nutrients) })
   } catch (error) { return respondWithError(c, error) }
+})
+
+app.get('/api/private/session', (c) => {
+  const { userId, email } = c.get('userScope')
+  return c.json({ user: { id: userId, email } })
+})
+
+app.get('/api/private/recipes', async (c) => {
+  try {
+    const limit = c.req.query('limit') === undefined ? 50 : parsePositiveInteger(c.req.query('limit')!)
+    if (limit === null) return c.json({ error: { code: 'INVALID_LIMIT', message: 'La limite doit être un entier positif.' } }, 400)
+    return c.json({ recipes: await listRecipeDrafts(c.env, c.get('userScope'), limit, fetcher) })
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
+app.get('/api/private/recipes/:recipeId', async (c) => {
+  try {
+    const recipe = await getRecipePersistence(c.env, c.get('userScope'), c.req.param('recipeId'), fetcher)
+    return recipe ? c.json(recipe) : c.json({ error: { code: 'NOT_FOUND', message: 'Recette introuvable.' } }, 404)
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
+app.put('/api/private/recipes/:recipeId/draft', async (c) => {
+  const parsed = await readDraftBody(c)
+  if (parsed instanceof Response) return parsed
+  if (!isRecord(parsed.draft) || parsed.draft.id !== c.req.param('recipeId')) {
+    return c.json({ error: { code: 'INVALID_RECIPE', message: 'L’identifiant du brouillon ne correspond pas à la route.' } }, 400)
+  }
+  try {
+    const saved = await saveRecipeDraft(c.env, c.get('userScope'), parsed.draft as unknown as RecipeDraft, parsed.expectedRevision, fetcher)
+    return c.json({ draft: saved })
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
+app.get('/api/private/journal/:dayId', async (c) => {
+  try {
+    const journal = await getJournalPersistence(c.env, c.get('userScope'), c.req.param('dayId'), fetcher)
+    return journal ? c.json(journal) : c.json({ error: { code: 'NOT_FOUND', message: 'Journée introuvable.' } }, 404)
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
+app.put('/api/private/journal/:dayId/draft', async (c) => {
+  const parsed = await readDraftBody(c)
+  if (parsed instanceof Response) return parsed
+  if (!isRecord(parsed.draft) || parsed.draft.id !== c.req.param('dayId')) {
+    return c.json({ error: { code: 'INVALID_JOURNAL', message: 'L’identifiant du brouillon ne correspond pas à la route.' } }, 400)
+  }
+  try {
+    const saved = await saveJournalDayDraft(c.env, c.get('userScope'), parsed.draft as unknown as JournalDayDraft, parsed.expectedRevision, fetcher)
+    return c.json({ draft: saved })
+  } catch (error) { return respondPersistenceError(c, error) }
 })
 
 app.notFound((c) => c.json({ error: { code: 'NOT_FOUND', message: 'Route introuvable.' } }, 404))
 app.onError((_error, c) => c.json({ error: { code: 'INTERNAL_ERROR', message: 'Une erreur interne est survenue.' } }, 500))
+return app
+}
 
-async function requestFdc(path: string, apiKey: string | undefined, params: Record<string, string> = {}): Promise<unknown> {
+async function readDraftBody(c: Context<AppEnv>): Promise<{ draft: unknown; expectedRevision: number } | Response> {
+  let value: unknown
+  try { value = await c.req.json() } catch { return c.json({ error: { code: 'INVALID_BODY', message: 'Le corps JSON est invalide.' } }, 400) }
+  if (!isRecord(value)) return c.json({ error: { code: 'INVALID_BODY', message: 'Un brouillon JSON est requis.' } }, 400)
+  if (containsUserId(value)) return c.json({ error: { code: 'AUTH_FORBIDDEN', message: 'L’identité utilisateur provient exclusivement de la session Auth.' } }, 403)
+  if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0 || !('draft' in value)) {
+    return c.json({ error: { code: 'INVALID_BODY', message: 'draft et expectedRevision sont requis.' } }, 400)
+  }
+  return { draft: value.draft, expectedRevision: value.expectedRevision as number }
+}
+
+function containsUserId(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(containsUserId)
+  if (!isRecord(value)) return false
+  return Object.entries(value).some(([key, nested]) => key.replace(/[_-]/g, '').toLowerCase() === 'userid' || containsUserId(nested))
+}
+
+function respondPersistenceError(c: Context<AppEnv>, error: unknown) {
+  if (error instanceof RecipePersistenceError || error instanceof JournalPersistenceError) {
+    const status = error.code === 'INVALID_RECIPE' || error.code === 'INVALID_JOURNAL' ? 400
+      : error.code === 'REVISION_CONFLICT' ? 409
+        : error.code === 'CONFIGURATION' ? 503 : 502
+    return c.json({ error: { code: error.code, message: error.message } }, status)
+  }
+  return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Une erreur interne est survenue.' } }, 500)
+}
+
+/** Server-only import entry point: fetches the full FDC detail by ID before persisting it. */
+export async function importUsdaFoodByFdcId(
+  bindings: Bindings,
+  fdcId: number,
+  usdaFetcher: typeof fetch = fetch,
+  supabaseFetcher: typeof fetch = fetch,
+) {
+  if (!Number.isSafeInteger(fdcId) || fdcId <= 0) throw new FdcError(400, 'FDC_INVALID_RESPONSE', 'L’identifiant fdcId doit être un entier positif.')
+  const payload = await requestFdc(`/food/${fdcId}`, bindings.FDC_API_KEY, {}, usdaFetcher)
+  if (!isRecord(payload) || finiteNumber(payload.fdcId) !== fdcId) {
+    throw new FdcError(502, 'FDC_INVALID_RESPONSE', 'FoodData Central a retourné une fiche détaillée invalide.')
+  }
+  const detail: UsdaFoodDetail = mapDetailFood(payload)
+  return persistUsdaFood(bindings, detail, supabaseFetcher)
+}
+
+async function requestFdc(path: string, apiKey: string | undefined, params: Record<string, string> = {}, fetcher: typeof fetch = fetch): Promise<unknown> {
   const key = apiKey?.trim()
   if (!key) throw new FdcError(503, 'FDC_UNAVAILABLE', 'La source USDA n’est pas configurée.')
   const url = new URL(FDC_API_BASE + path)
@@ -65,13 +191,13 @@ async function requestFdc(path: string, apiKey: string | undefined, params: Reco
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const response = await fetch(url, { headers: { accept: 'application/json' }, signal: controller.signal })
+    const response = await fetcher(url, { headers: { accept: 'application/json' }, signal: controller.signal })
     if (!response.ok) {
       if (response.status === 404 && path.startsWith('/food/')) throw new FdcError(404, 'FDC_FOOD_NOT_FOUND', 'Aliment introuvable dans FoodData Central.')
       if (response.status === 429) throw new FdcError(429, 'FDC_RATE_LIMITED', 'La limite de requêtes USDA est atteinte. Réessayez plus tard.')
       throw new FdcError(502, 'FDC_REJECTED', 'FoodData Central n’a pas pu traiter la requête.')
     }
-    return await response.json() as unknown
+    return parseJsonWithExactNumbers(await response.text())
   } catch (error) {
     if (error instanceof FdcError) throw error
     if (controller.signal.aborted) throw new FdcError(504, 'FDC_TIMEOUT', 'FoodData Central ne répond pas dans le délai prévu.')
@@ -79,21 +205,94 @@ async function requestFdc(path: string, apiKey: string | undefined, params: Reco
   } finally { clearTimeout(timeoutId) }
 }
 
-function mapSearchFood(food: JsonRecord) {
-  const nutrients = Array.isArray(food.foodNutrients) ? food.foodNutrients.filter(isRecord).map(mapSearchNutrient).filter((nutrient): nutrient is FoodNutrient => nutrient !== null) : []
-  return { fdcId: finiteNumber(food.fdcId), description: stringValue(food.description), dataType: stringValue(food.dataType), brandOwner: stringValue(food.brandOwner), nutrients }
+type SearchFood = {
+  fdcId: number
+  description: string
+  dataType: string | null
+  brandOwner: string | null
+  score?: number
+  foodCategory: 'generic' | 'branded'
+  searchOrder: number
 }
-function mapSearchNutrient(raw: JsonRecord): FoodNutrient | null {
-  const name = stringValue(raw.nutrientName) ?? stringValue(raw.name)
-  if (!name) return null
-  return { id: finiteNumber(raw.nutrientId) ?? finiteNumber(raw.id), name, unitName: stringValue(raw.unitName) ?? '', value: nutrientValue(raw.value ?? raw.amount) }
+
+type SearchFoodResponse = Omit<SearchFood, 'searchOrder'>
+
+function mapSearchFood(food: JsonRecord): SearchFood | null {
+  const fdcId = finiteNumber(food.fdcId)
+  const description = stringValue(food.description)?.trim()
+  if (fdcId === null || !Number.isSafeInteger(fdcId) || fdcId <= 0 || !description) return null
+
+  const dataType = stringValue(food.dataType)
+  const score = finiteNumber(food.score)
+  return {
+    fdcId,
+    description,
+    dataType,
+    brandOwner: stringValue(food.brandOwner),
+    ...(score !== null ? { score } : {}),
+    foodCategory: dataType === 'Branded' ? 'branded' : 'generic',
+    searchOrder: 0,
+  }
+}
+function mapDetailFood(payload: JsonRecord) {
+  const dataType = stringValue(payload.dataType)
+  const servingSize = finiteNumber(payload.servingSize)
+  const servingSizeUnit = stringValue(payload.servingSizeUnit)
+  const nutrients = Array.isArray(payload.foodNutrients)
+    ? payload.foodNutrients.filter(isRecord).flatMap((raw) => {
+      const nutrient = mapDetailNutrient(raw)
+      if (!nutrient) return []
+      return [{
+        ...nutrient,
+        basis: resolveNutrientBasis(dataType, servingSizeUnit, nutrient.unitName, hasFdcDerivation(raw.foodNutrientDerivation)),
+      }]
+    })
+    : []
+  return {
+    fdcId: finiteNumber(payload.fdcId) ?? 0,
+    description: stringValue(payload.description),
+    dataType,
+    foodCategory: stringValue(payload.foodCategory),
+    brandOwner: stringValue(payload.brandOwner),
+    servingSize,
+    servingSizeUnit,
+    nutrients,
+  }
 }
 function mapDetailNutrient(raw: JsonRecord): FoodNutrient | null {
   const nutrient = isRecord(raw.nutrient) ? raw.nutrient : raw
   const name = stringValue(nutrient.name) ?? stringValue(raw.nutrientName)
   if (!name) return null
+  const value = nutrientValue(raw.amount ?? raw.value)
+  if (value === null) return null
   const id = finiteNumber(nutrient.id) ?? finiteNumber(raw.nutrientId) ?? finiteNumber(nutrient.number)
-  return { id, name, unitName: stringValue(nutrient.unitName) ?? stringValue(raw.unitName) ?? '', value: nutrientValue(raw.amount ?? raw.value) }
+  return { id, name, unitName: stringValue(nutrient.unitName) ?? stringValue(raw.unitName) ?? '', value, basis: null }
+}
+export function resolveNutrientBasis(dataType: string | null, servingSizeUnit: string | null, nutrientUnit: string, hasDerivation = false): NutrientBasis {
+  const normalizedNutrientUnit = nutrientUnit.trim().toLowerCase()
+  if (normalizedNutrientUnit.includes('%') || normalizedNutrientUnit.includes('percent')) return null
+
+  if (dataType === 'Branded') {
+    if (!hasDerivation) return null
+    const unit = normalizeBasisUnit(servingSizeUnit)
+    return unit ? { quantity: 100, unit, source: 'fdc_branded_standardization' } : null
+  }
+
+  if (dataType === 'Foundation' || dataType === 'SR Legacy' || dataType === 'Survey (FNDDS)') {
+    return { quantity: 100, unit: 'g', source: 'fdc_data_type' }
+  }
+
+  return null
+}
+function hasFdcDerivation(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return finiteNumber(value.id) !== null || (typeof value.code === 'string' && value.code.trim() !== '')
+}
+function normalizeBasisUnit(value: string | null): 'g' | 'ml' | null {
+  const unit = value?.trim().toLowerCase()
+  if (unit === 'g') return 'g'
+  if (unit === 'ml') return 'ml'
+  return null
 }
 function selectKeyNutrients(nutrients: FoodNutrient[]) {
   return {
@@ -107,10 +306,64 @@ function selectKeyNutrients(nutrients: FoodNutrient[]) {
 function findNutrient(nutrients: FoodNutrient[], ids: ReadonlySet<number>, labels: string[]): FoodNutrient | null {
   return nutrients.find((item) => item.id !== null && ids.has(item.id)) ?? nutrients.find((item) => labels.some((label) => item.name.toLowerCase().includes(label))) ?? null
 }
-function nutrientValue(value: unknown): NutrientValue {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string') return value
-  return null
+function parsePositiveInteger(value: string): number | null {
+  if (!/^\d+$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+function deduplicateSearchFoods(foods: SearchFood[]): SearchFood[] {
+  const byFdcId = new Map<number, SearchFood>()
+  for (const [searchOrder, food] of foods.entries()) {
+    const candidate = { ...food, searchOrder }
+    const existing = byFdcId.get(food.fdcId)
+    if (!existing || (candidate.score ?? Number.NEGATIVE_INFINITY) > (existing.score ?? Number.NEGATIVE_INFINITY)) {
+      byFdcId.set(food.fdcId, candidate)
+    }
+  }
+  return [...byFdcId.values()]
+}
+function rankSearchFoods(query: string, foods: SearchFood[]): SearchFoodResponse[] {
+  const normalizedQuery = normalizeSearchText(query)
+  const sourcePriority: Record<string, number> = {
+    Foundation: 0,
+    'SR Legacy': 1,
+    'Survey (FNDDS)': 2,
+    Branded: 3,
+  }
+
+  return foods.sort((left, right) => {
+    const leftExact = normalizeSearchText(left.description) === normalizedQuery
+    const rightExact = normalizeSearchText(right.description) === normalizedQuery
+    if (leftExact !== rightExact) return leftExact ? -1 : 1
+
+    // Scores are the primary relevance signal; source priority breaks equal scores or absent scores.
+    const leftScore = left.score ?? Number.NEGATIVE_INFINITY
+    const rightScore = right.score ?? Number.NEGATIVE_INFINITY
+    if (leftScore !== rightScore) return leftScore > rightScore ? -1 : 1
+
+    const sourceOrder = (sourcePriority[left.dataType ?? ''] ?? 4) - (sourcePriority[right.dataType ?? ''] ?? 4)
+    if (sourceOrder !== 0) return sourceOrder
+    return left.searchOrder - right.searchOrder
+  }).map((food): SearchFoodResponse => ({
+    fdcId: food.fdcId,
+    description: food.description,
+    dataType: food.dataType,
+    brandOwner: food.brandOwner,
+    ...(food.score !== undefined ? { score: food.score } : {}),
+    foodCategory: food.foodCategory,
+  }))
+}
+function normalizeSearchText(value: string): string {
+  return value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase().replace(/[^\p{Letter}\p{Number}]+/gu, ' ').trim()
+}
+function nutrientValue(value: unknown): NutrientValue | null {
+  if (typeof value !== 'string' || value.trim() === '') return null
+  try {
+    parseDecimal(value)
+    return value
+  } catch {
+    return null
+  }
 }
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -124,4 +377,5 @@ function respondWithError(c: Context<AppEnv>, error: unknown) {
   return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Une erreur interne est survenue.' } }, 500)
 }
 
+const app = createWorkerApp()
 export default app

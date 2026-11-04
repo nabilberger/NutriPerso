@@ -20,7 +20,7 @@
 | Domaine | Entités |
 |---|---|
 | Profil/objectifs | user_profile, energy_goal |
-| Catalogue | food_source, food_item, food_nutrient, food_portion |
+| Catalogue | foods, food_nutrients, food_portion |
 | Journal | meal, meal_item, meal_day_status |
 | Modèles/recettes | meal_template, meal_template_item, recipe, recipe_ingredient |
 | Mesures | body_measurement |
@@ -40,17 +40,14 @@ Champs : id UUID PK, goal_type (lose, maintain, gain), target_kcal numeric(12,6)
 
 ## 4. Catalogue alimentaire
 
-### food_source
-Référentiel : USDA_FDC, LOCAL_CATALOG, USER_CUSTOM. Champs : id UUID PK, code unique, label, source_url nullable, created_at.
+### foods
+Table SQL V1 : id UUID PK, source_type (usda/local/custom), fdc_id nullable unique, description, category nullable, data_type nullable, brand_owner nullable, source_name/source_reference/source_notes nullable, imported_at nullable, created_at, updated_at. Un fdc_id n'est permis que pour une fiche USDA. La description sert aussi de nom affiché et recherché. Les champs de provenance complémentaire décrivent notamment le jeu de données, l'étiquette ou la référence utilisés pour un aliment local ou personnalisé. Un import USDA est idempotent sur fdc_id et ne peut pas remplacer une fiche locale ou personnalisée.
 
-### food_item
-Champs : id UUID PK, source_id FK, external_id nullable, name, normalized_name, category nullable, reference_basis (per_100g/per_100ml), is_user_editable, is_active, provenance JSONB, created_at, updated_at. Un identifiant externe est unique dans sa source. Le catalogue regroupe USDA, aliments locaux (notamment marocains) et aliments personnalisés. Un import n'écrase jamais silencieusement une fiche personnelle.
-
-### food_nutrient
-Une ligne par nutriment/aliment : food_item_id FK, nutrient_code (energy_kcal, protein_g, carbohydrate_g, fat_g, fiber_g), value_per_100 numeric(14,6), unit contrôlée. Clé primaire composée food_item_id + nutrient_code. Une valeur inconnue reste absente/null, jamais assimilée à zéro.
+### food_nutrients
+Une ligne par nutriment/aliment : food_id FK, nutrient_code, nutrient_name, fdc_nutrient_id nullable, value `numeric NOT NULL`, unit nullable, reference_quantity/reference_unit nullable numeric/text, basis_source nullable. La valeur est obligatoire : un nutriment dont la valeur source est absente, invalide ou inconnue n'est pas inséré comme ligne. Une valeur numérique égale à zéro reste valide. Les colonnes numériques sont en `numeric` sans précision imposée afin d'éviter l'arrondi à l'enregistrement des valeurs décimales source. La base de référence appartient à chaque nutriment, pas à l'aliment. Elle n'est renseignée que si elle est établie (par exemple 100 g ou 100 ml); sinon les colonnes de base restent nulles. `basis_source` indique la règle ayant établi la base (type USDA, standardisation USDA Branded avec unité et dérivation du nutriment reconnues, documentation d'une source locale ou saisie manuelle). La taille numérique d'une portion n'établit jamais cette base. Les valeurs et unités reçues de USDA sont conservées sans conversion; une valeur inconnue reste absente/null, jamais assimilée à zéro. Clé primaire composée food_id + nutrient_code; l'identifiant de nutriment USDA est unique par aliment lorsqu'il est fourni.
 
 ### food_portion
-Champs : id, food_item_id FK, label (pièce, cuillère…), quantity_value, quantity_unit (g/ml), is_default. Équivalences explicites propres à chaque aliment. Pas de conversion générique g/ml; densité documentée nécessaire.
+Champs : id, food_item_id FK, label (pièce, cuillère…), quantity_value, quantity_unit (g/ml), is_default. Équivalences explicites propres à chaque aliment. Pas de conversion générique g/ml; densité documentée nécessaire. Cette table n'est pas créée par la première migration du catalogue.
 
 ## 5. Journal alimentaire
 
@@ -116,7 +113,7 @@ Trace facultative : format, date, statut, manifeste. Données structurées JSON/
 ## 13. Relations principales
 
 - user_profile 1—N energy_goal.
-- food_source 1—N food_item; food_item 1—N food_nutrient et food_portion.
+- foods (source_type usda/local/custom) 1—N food_nutrients et food_portion.
 - meal 1—N meal_item; chaque ligne référence un aliment ou une recette et conserve son instantané.
 - meal_template 1—N meal_template_item; recipe 1—N recipe_ingredient.
 - meal 1—N media_asset; ai_request 1—N media_asset selon besoin.
@@ -128,7 +125,7 @@ Trace facultative : format, date, statut, manifeste. Données structurées JSON/
 ## 14. Index et contraintes
 
 - Index meal(consumed_at DESC), meal(status, consumed_at DESC), meal_item(meal_id).
-- Index food_item(normalized_name); unicité partielle (source_id, external_id) si external_id existe.
+- Index de recherche préfixe insensible à la casse sur foods(description); unicité de foods(fdc_id), les valeurs nulles étant permises pour les aliments locaux/personnalisés.
 - Index body_measurement(measurement_type, measured_at DESC).
 - Index ai_request(status, created_at), conversation(expires_at), reminder_event(scheduled_at).
 - Index sync_operation(status, client_created_at), record_tombstone(entity_type, entity_id).
@@ -136,8 +133,8 @@ Trace facultative : format, date, statut, manifeste. Données structurées JSON/
 - Politique explicite sur les clés étrangères; pas de cascade destructive sur les historiques/fichiers.
 - Valeurs nutritionnelles en numeric, jamais float/real pour les calculs.
 
-## 15. À préciser avant migrations SQL
+## 15. À préciser pour les migrations suivantes
 
-Outil de migration et environnements; détails portions/densités et import USDA; formats/limites/compression photos; stockage des sauvegardes sur serveur personnel et gestion des clés; purge des tombstones; compatibilité Supabase/Hyperdrive et procédure de restauration.
+Séparation des environnements; portions/densités et import USDA; formats/limites/compression photos; stockage des sauvegardes sur serveur personnel et gestion des clés; purge des tombstones; compatibilité Supabase/Hyperdrive et procédure de restauration.
 
-Aucun SQL de production, aucune migration et aucune modification Supabase ne sont créés par ce document. Ils seront préparés après validation du modèle.
+La migration locale initiale crée uniquement `foods` et `food_nutrients`. Elle est versionnée dans `supabase/migrations/` et n'a pas été exécutée sur une base Supabase.
