@@ -57,3 +57,27 @@
 .recipes-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.recipes-list article{display:flex;gap:12px;align-items:center;padding:15px;border:1px solid var(--line);border-radius:13px}.recipe-symbol{width:40px;height:40px;border-radius:12px;background:#eaf3e8;display:grid;place-items:center;color:#679474;font-size:21px;flex:none}.recipes-list h3{font:19px var(--serif);margin:0}.recipes-list p{font-size:11px;color:#9cab9d;margin:7px 0 0}
 @media(max-width:860px){.food-layout{grid-template-columns:1fr}.data-page{padding:30px 20px 60px}}
 @media(max-width:560px){.food-search>div{flex-direction:column}.food-search button{width:100%}.recipes-list{grid-template-columns:1fr}.data-card{padding:18px}.nutrients-grid strong{font-size:19px}}
+
+.weight-summary{display:grid;grid-template-columns:1fr 1fr 1.15fr;gap:15px;margin:26px 0 19px}
+.weight-summary>div{background:#fff;border:1px solid var(--line);border-radius:15px;padding:22px}
+.weight-summary small{font-size:10px;letter-spacing:1.5px;color:#8ca08f;font-weight:700}
+.weight-summary strong{font:35px var(--serif);display:block;margin:8px 0;color:#365c43}
+.weight-summary strong span{font:14px "DM Sans",sans-serif;color:#879a87}
+.weight-summary p{font-size:11px;color:#9da99f;margin:0}
+.weight-summary .weight-accent{background:#315d4b;border-color:#315d4b}
+.weight-summary .weight-accent small{color:#bfdbc0}.weight-summary .weight-accent p{color:#fff;font:22px/1.3 var(--serif);margin-top:18px}
+.weight-layout{display:grid;grid-template-columns:1.4fr .8fr;gap:17px;margin-bottom:20px}
+.weight-chart svg{width:100%;height:auto;display:block;margin:17px auto}
+.measurement-form{display:grid;gap:14px}
+.measurement-form label{display:grid;gap:7px;font-size:11px;font-weight:600;color:#68806e}
+.measurement-form input{padding:12px;border:1px solid #dfe9df;background:#fafbf9;border-radius:9px;color:#2c5138;min-width:0}
+.measurement-form button{background:#315d4b;color:white;border:0;border-radius:9px;padding:13px;font-size:12px;font-weight:700}
+.measurement-form button:disabled{opacity:.6}
+.weight-history{margin-bottom:25px}.measurement-list{display:grid;gap:0}
+.measurement-list>div{display:grid;grid-template-columns:120px 100px minmax(0,1fr) auto;align-items:center;gap:12px;border-bottom:1px solid #eef2ec;padding:13px 5px;font-size:12px}
+.measurement-list>div:last-child{border-bottom:0}
+.measurement-list time{color:#819886}.measurement-list strong{color:#3f644a}
+.measurement-list span{color:#92a096;overflow-wrap:anywhere}
+.measurement-list button{border:0;background:#faf0e9;color:#aa765d;padding:8px 10px;border-radius:8px;font-size:10px}
+@media(max-width:1000px){.weight-layout{grid-template-columns:1fr}.weight-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.weight-accent{grid-column:1/-1}}
+@media(max-width:560px){.weight-summary{grid-template-columns:1fr}.weight-accent{grid-column:auto}.measurement-list>div{grid-template-columns:1fr auto}.measurement-list span{grid-column:1/-1}.measurement-list button{grid-column:2;grid-row:1/3}}
