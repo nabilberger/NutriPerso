@@ -45,7 +45,7 @@ export class SupabaseAuthClient {
   constructor(config: SupabaseConfig, runtime: Runtime = {}) {
     this.config = config
     this.runtime = runtime
-    this.fetcher = runtime.fetcher ?? fetch
+    this.fetcher = (runtime.fetcher ?? globalThis.fetch).bind(globalThis)
     this.now = runtime.now ?? Date.now
   }
 
@@ -264,8 +264,8 @@ export class SupabaseAuthClient {
         ...init,
         headers: { apikey: this.config.publishableKey, Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
       })
-    } catch {
-      throw new SupabaseAuthError('NETWORK', 'Impossible de joindre Supabase Auth depuis ce site. Vérifiez les variables VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY, la connexion réseau et les règles d’origine/CORS du domaine actuel.')
+    } catch (reason) {
+      throw new SupabaseAuthError('NETWORK', authFetchErrorMessage(reason))
     }
     if (!response.ok) {
       if ((response.status === 400 || response.status === 401) && failureCode === 'SESSION_EXPIRED') {
@@ -406,4 +406,11 @@ function parsePositiveInteger(value: string | null): number | null {
   if (!value || !/^\d+$/.test(value)) return null
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+function authFetchErrorMessage(reason: unknown): string {
+  if (reason instanceof Error && /illegal invocation/i.test(reason.message)) {
+    return 'Le navigateur a rejeté l’appel fetch à Supabase Auth : le contexte global du transport était invalide.'
+  }
+  const errorType = reason instanceof Error ? reason.name : 'Erreur inconnue'
+  return `La requête réseau vers Supabase Auth a échoué (${errorType}). Vérifiez VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY, l’URL du projet, le réseau et les règles CSP/CORS du domaine.`
 }

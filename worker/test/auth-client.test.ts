@@ -34,6 +34,37 @@ test('sign in persists an invited account session without a public signup method
   assert.equal('signUp' in auth, false)
 })
 
+test('calls the configured fetch transport with the global receiver', async () => {
+  let receiver: unknown
+  const fetcher = function (this: unknown): Promise<Response> {
+    receiver = this
+    if (this !== globalThis) throw new TypeError('Illegal invocation')
+    return Promise.resolve(Response.json({ code: 'invalid_credentials' }, { status: 400 }))
+  }
+  const auth = new SupabaseAuthClient(config, { storage: new MemoryStorage(), autoRefresh: false, fetcher })
+  await assert.rejects(auth.signInWithPassword('invited@example.test', 'fake-password'), (error: unknown) => {
+    assert.ok(error instanceof SupabaseAuthError)
+    assert.equal(error.code, 'AUTHENTICATION_FAILED')
+    return true
+  })
+  assert.equal(receiver, globalThis)
+})
+
+test('network diagnostics classify detached fetch without exposing credentials or tokens', async () => {
+  const auth = new SupabaseAuthClient(config, { storage: new MemoryStorage(), autoRefresh: false, fetcher: async () => {
+    throw new TypeError('Illegal invocation: fake-access-token fake-password')
+  } })
+  await assert.rejects(auth.signInWithPassword('invited@example.test', 'fake-password'), (error: unknown) => {
+    assert.ok(error instanceof SupabaseAuthError)
+    assert.equal(error.code, 'NETWORK')
+    assert.match(error.message, /contexte global du transport était invalide/)
+    assert.equal(error.message.includes('fake-access-token'), false)
+    assert.equal(error.message.includes('fake-password'), false)
+    assert.equal(error.message.includes('invited@example.test'), false)
+    return true
+  })
+})
+
 test('restores a persisted session and atomically stores the rotated refresh token', async () => {
   const storage = new MemoryStorage()
   storage.setItem('nutrip.auth.session.v1', JSON.stringify({
