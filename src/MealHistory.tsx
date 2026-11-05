@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { requestPrivateJson } from './auth/client'
 import type { ConfirmedMealSnapshot, MealKind } from './domain/nutrition/journal'
 import type { MealReuseDTO } from './meal-reuse'
