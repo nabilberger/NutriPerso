@@ -28,8 +28,7 @@ export async function saveMealTemplate(env: SupabaseCatalogEnv, scope: MealTempl
     || !Number.isSafeInteger(input.revision) || (input.revision as number) < 1) throw new MealTemplateError(400, 'Le modèle est invalide.')
   if (expectedRevision !== null && input.revision !== expectedRevision + 1) throw new MealTemplateError(409, 'La révision suivante est requise.')
   const url = tableUrl(env)
-  if (expectedRevision === null) url.searchParams.set('on_conflict', 'id')
-  else {
+  if (expectedRevision !== null) {
     url.searchParams.set('id', `eq.${input.id}`)
     url.searchParams.set('user_id', `eq.${scope.userId}`)
     url.searchParams.set('revision', `eq.${expectedRevision}`)
