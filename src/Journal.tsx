@@ -11,6 +11,7 @@ import type { NutrientTotal } from './domain/nutrition/types.ts'
 import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
 import { buildMealReuseDraft, selectCurrentRecipeSnapshot, type MealReuseDTO } from './meal-reuse'
 import { createUuidV4 } from './secure-uuid.ts'
+import { uiFixtureMode } from './ui-fixture-mode'
 import { decimalToFraction, fractionToDecimal, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { requestPrivateJson } from './auth/client'
@@ -143,6 +144,8 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
         } catch {
           setMessageForKey(requestKey, 'Synchronisation en attente : la dernière version serveur n’a pas pu être relue.')
         }
+      } else if (uiFixtureMode) {
+        setMessageForKey(requestKey, `Erreur de simulation locale : ${message || 'la transition fictive n’a pas abouti.'}`)
       } else setMessageForKey(requestKey, navigator.onLine
         ? 'Serveur inaccessible : les changements restent en attente sur cet appareil.'
         : storageErrorRef.current ? 'Stockage local indisponible : la modification n’est pas sauvegardée et sera perdue à la fermeture.'

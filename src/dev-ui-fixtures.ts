@@ -1,6 +1,6 @@
 import {
-  addFoodJournalItem, addRecipeJournalItem, confirmMeal, createJournalDay, createJournalState,
-  createMeal, type ConfirmedMealSnapshot, type JournalDayDraft,
+  addFoodJournalItem, addRecipeJournalItem, cancelConfirmedMeal, confirmMeal, createJournalDay, createJournalState,
+  createMeal, selectActiveMealSnapshots, type ConfirmedMealSnapshot, type JournalDayDraft,
 } from './domain/nutrition/journal.ts'
 import { createConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
 import { addRecipeIngredient, calculateRecipe, createRecipe, setRecipeServings, type FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
@@ -58,7 +58,7 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
   if(url.pathname==='/api/private/profile'&&method==='GET')return {profile:null} as T
   if(url.pathname==='/api/private/journal/history'&&method==='GET'){
     const q=url.searchParams.get('q')??'',from=url.searchParams.get('from')??'',to=url.searchParams.get('to')??''
-    const filtered=history.filter(m=>m.status==='confirmed'&&(!q||normalize([m.label??'',...m.items.map(i=>i.kind==='food'?i.foodSnapshot.description:i.recipeSnapshot.recipe.name)].join(' ')).includes(normalize(q)))&&(!from||m.localDate>=from)&&(!to||m.localDate<=to)).sort((a,b)=>b.localDate.localeCompare(a.localDate))
+    const filtered=selectActiveMealSnapshots(history).filter(m=>(!q||normalize([m.label??'',...m.items.map(i=>i.kind==='food'?i.foodSnapshot.description:i.recipeSnapshot.recipe.name)].join(' ')).includes(normalize(q)))&&(!from||m.localDate>=from)&&(!to||m.localDate<=to)).sort((a,b)=>b.localDate.localeCompare(a.localDate))
     const limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit'))||20)),offset=Math.max(0,Number(url.searchParams.get('offset'))||0)
     return {meals:filtered.slice(offset,offset+limit),total:filtered.length,limit,offset} as T
   }
@@ -79,16 +79,65 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
   if(recipePath&&method==='GET'&&decodeURIComponent(recipePath[1]!)===recipeId)return {snapshots:[recipeSnapshot]} as T
   if(url.pathname==='/api/private/journal'&&method==='GET'){
     const date=url.searchParams.get('date')??dateDaysAgo(0)
-    return {journal:{day:drafts.get(date)??null,snapshots:history.filter(m=>m.localDate===date)}} as T
+    const snapshots=history.filter(m=>m.localDate===date)
+    let day=drafts.get(date)??null
+    if(!day&&snapshots.length){
+      const latest=snapshots.reduce((a,b)=>a.dayRevision>=b.dayRevision?a:b)
+      day={...createJournalDay(createJournalState(),{id:latest.dayId,localDate:latest.localDate,timeZone:latest.timeZone}).days[0]!,
+        revision:latest.dayRevision+1,meals:[]}
+      drafts.set(date,day)
+    }
+    return {journal:day?{day,snapshots}:null} as T
   }
-  if(url.pathname.endsWith('/draft')&&method==='PUT'){const draft=body(init).draft as JournalDayDraft;drafts.set(draft.localDate,draft);return {draft} as T}
+  if(url.pathname.endsWith('/draft')&&method==='PUT'){
+    const data=body(init),draft=data.draft as JournalDayDraft,expectedRevision=Number(data.expectedRevision)
+    const routeDayId=url.pathname.split('/').at(-2)
+    const current=drafts.get(draft.localDate),currentRevision=current?.revision??0
+    if(!draft||draft.id!==routeDayId)throw new Error('400 Identifiant de journée invalide dans la recette UI.')
+    if(!Number.isSafeInteger(expectedRevision)||expectedRevision!==currentRevision||draft.revision!==expectedRevision+1)
+      throw new Error('409 Conflit de révision du brouillon simulé.')
+    drafts.set(draft.localDate,draft)
+    return {draft} as T
+  }
   if(url.pathname.endsWith('/confirm')&&method==='POST'){
-    const data=body(init),segments=url.pathname.split('/'),dayId=segments.at(-4),mealId=segments.at(-2),day=[...drafts.values()].find(d=>d.id===dayId),meal=day?.meals.find(m=>m.id===mealId)
-    if(!day||!meal)throw new Error('Mode recette : repas de démonstration introuvable.')
+    const data=body(init),segments=url.pathname.split('/'),dayId=segments.at(-4),mealId=segments.at(-2)
+    const day=[...drafts.values()].find(d=>d.id===dayId),meal=day?.meals.find(m=>m.id===mealId)
+    if(!day||!meal)throw new Error('409 Brouillon de repas introuvable ou déjà confirmé dans la recette UI.')
+    const retry=history.find(s=>s.snapshotId===data.snapshotId)
+    if(retry){
+      if(retry.logicalMealId!==mealId||retry.dayId!==dayId||retry.status!=='confirmed')throw new Error('409 Identifiant de confirmation déjà utilisé.')
+      return {day,snapshot:retry} as T
+    }
     const result=confirmMeal({days:[day],snapshots:history},day.id,meal.id,{foods:new Map([[chickpea.foodId,chickpea],[couscous.foodId,couscous]])},
       {snapshotId:String(data.snapshotId),confirmedAt:String(data.confirmedAt),engineVersion:String(data.engineVersion)})
-    const updated={...day,revision:day.revision+1,meals:day.meals.filter(m=>m.id!==meal.id)}
-    drafts.set(day.localDate,updated);history.unshift(result.snapshot);return {day:updated,snapshot:result.snapshot} as T
+    const updated=result.state.days.find(candidate=>candidate.id===day.id)!
+    drafts.set(day.localDate,updated)
+    history.splice(0,history.length,...result.state.snapshots)
+    return {day:updated,snapshot:result.snapshot} as T
+  }
+  const cancelPath=/^\\/api\\/private\\/journal\\/snapshots\\/([^/]+)\\/cancel$/.exec(url.pathname)
+  if(cancelPath&&method==='POST'){
+    const data=body(init),snapshotId=decodeURIComponent(cancelPath[1]!)
+    const input={newSnapshotId:String(data.newSnapshotId),confirmedAt:String(data.confirmedAt),engineVersion:String(data.engineVersion)}
+    const retry=history.find(s=>s.snapshotId===input.newSnapshotId)
+    if(retry){
+      if(retry.status!=='void'||retry.supersedesSnapshotId!==snapshotId)throw new Error('409 Identifiant d’annulation déjà utilisé.')
+      const saved=drafts.get(retry.localDate)
+      if(!saved)throw new Error('404 Journée de la correction introuvable dans la recette UI.')
+      return {day:saved,snapshot:retry} as T
+    }
+    const predecessor=history.find(s=>s.snapshotId===snapshotId)
+    if(!predecessor)throw new Error('404 Snapshot de repas introuvable dans la recette UI.')
+    let day=drafts.get(predecessor.localDate)
+    if(!day){
+      day={...createJournalDay(createJournalState(),{id:predecessor.dayId,localDate:predecessor.localDate,timeZone:predecessor.timeZone}).days[0]!,
+        revision:predecessor.dayRevision+1,meals:[]}
+    }
+    const result=cancelConfirmedMeal({days:[day],snapshots:history},snapshotId,input)
+    const updated={...day,revision:day.revision+1,meals:day.meals.filter(m=>m.id!==predecessor.logicalMealId)}
+    drafts.set(updated.localDate,updated)
+    history.splice(0,history.length,...result.state.snapshots)
+    return {day:updated,snapshot:result.snapshot} as T
   }
   throw new Error(`Mode recette UI : route non simulée; aucun appel réseau effectué (${method} ${url.pathname}).`)
 }
