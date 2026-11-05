@@ -59,6 +59,11 @@ function validate(v: unknown): Profile {
   if (avatar !== null && !/^data:image\/(jpeg|webp|png);base64,[a-zA-Z0-9+/=]+$/.test(avatar)) throw new ProfileError(400,'Format de photo invalide.')
   const zone = text(v.timeZone,80)
   try { new Intl.DateTimeFormat('fr', {timeZone:zone}) } catch { throw new ProfileError(400,'Fuseau horaire invalide.') }
+  const fastingStart = optionalTime(v.fastingStart)
+  const fastingEnd = optionalTime(v.fastingEnd)
+  if (v.fastingEnabled && (!fastingStart || !fastingEnd)) {
+    throw new ProfileError(400,'Les heures de début et de fin sont requises lorsque le jeûne intermittent est activé.')
+  }
   return {
     displayName:text(v.displayName,80).trim(), avatarDataUrl:avatar,
     heightCm:optionalNumber(v.heightCm,80,250),
@@ -66,7 +71,7 @@ function validate(v: unknown): Profile {
     goal:oneOf(v.goal,['maintain','lose','gain'] as const),
     dietaryPattern:oneOf(v.dietaryPattern,['mediterranean','vegetarian','vegan','other'] as const),
     mealsPerDay:v.mealsPerDay as number,
-    fastingEnabled:v.fastingEnabled, fastingStart:optionalTime(v.fastingStart), fastingEnd:optionalTime(v.fastingEnd),
+    fastingEnabled:v.fastingEnabled, fastingStart, fastingEnd,
     avoidAddedSalt:v.avoidAddedSalt, avoidAddedSugar:v.avoidAddedSugar,
     notes:text(v.notes,1200), timeZone:zone,
   }

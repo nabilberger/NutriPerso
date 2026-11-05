@@ -48,6 +48,7 @@ export default function ProfileSettings({email,onSaved}: Props) {
   const [profile,setProfile]=useState<Profile|null>(null)
   const [loading,setLoading]=useState(true)
   const [saving,setSaving]=useState(false)
+  const [photoProcessing,setPhotoProcessing]=useState(false)
   const [message,setMessage]=useState('')
   const [error,setError]=useState('')
   useEffect(()=>{
@@ -62,9 +63,10 @@ export default function ProfileSettings({email,onSaved}: Props) {
   async function photoChanged(e:ChangeEvent<HTMLInputElement>) {
     const file=e.target.files?.[0]
     if(!file)return
+    setPhotoProcessing(true)
     try {patch('avatarDataUrl',await compressPhoto(file));setError('')}
     catch(err){setError(err instanceof Error?err.message:'Photo invalide.')}
-    e.target.value=''
+    finally {e.target.value='';setPhotoProcessing(false)}
   }
   async function submit(e:FormEvent<HTMLFormElement>){
     e.preventDefault()
@@ -79,17 +81,19 @@ export default function ProfileSettings({email,onSaved}: Props) {
     finally {setSaving(false)}
   }
   return <div className="profile-page">
-    <div className="profile-heading"><small>VOTRE ESPACE PERSONNEL</small><h1>Un espace <em>à votre image.</em></h1>
+    <div className="profile-heading"><small>VOTRE ESPACE PERSONNEL</small><h1 tabIndex={-1}>Un espace <em>à votre image.</em></h1>
       <p>Vos objectifs, vos habitudes et vos préférences, au même endroit.</p></div>
     {loading ? <p className="profile-notice">Chargement de votre profil…</p>
     : !profile ? <div className="profile-notice" role="alert">{error || 'Impossible de charger le profil.'}</div>
-    : <form className="profile-layout" onSubmit={e=>void submit(e)}>
+    : <form className="profile-layout" onSubmit={e=>void submit(e)} aria-busy={saving}>
+      <fieldset className="profile-edit-fields" aria-label="Paramètres personnels" disabled={saving}>
       <section className="profile-panel profile-identity">
         <div className="profile-avatar">
           {profile.avatarDataUrl ? <img src={profile.avatarDataUrl} alt="Photo de profil"/> : <span>{profile.displayName.trim().charAt(0).toUpperCase() || profileInitial(email).charAt(0).toUpperCase()}</span>}
         </div>
-        <label className="photo-action">Choisir une photo<input type="file" accept="image/*" onChange={e=>void photoChanged(e)} /></label>
-        {profile.avatarDataUrl && <button type="button" className="text-button" onClick={()=>patch('avatarDataUrl',null)}>Retirer la photo</button>}
+        <label className="photo-action">Choisir une photo<input type="file" accept="image/*" disabled={photoProcessing} onChange={e=>void photoChanged(e)} /></label>
+        {photoProcessing&&<span className="profile-feedback" role="status">Traitement de la photo…</span>}
+        {profile.avatarDataUrl && <button type="button" className="text-button" disabled={photoProcessing} onClick={()=>patch('avatarDataUrl',null)}>Retirer la photo</button>}
         <h2>{profile.displayName || profileInitial(email)}</h2><p>{email}</p>
         <div className="profile-detail"><span>Votre objectif</span><strong>{profile.goal==='maintain'?'Stabiliser':profile.goal==='lose'?'Réduire':'Augmenter'} le poids</strong></div>
         <div className="profile-detail"><span>Vos repas quotidiens</span><strong>{profile.mealsPerDay}</strong></div>
@@ -115,16 +119,17 @@ export default function ProfileSettings({email,onSaved}: Props) {
           <label className="profile-check"><input type="checkbox" checked={profile.fastingEnabled} onChange={e=>patch('fastingEnabled',e.target.checked)}/>Je pratique le jeûne intermittent</label>
         </div>
         {profile.fastingEnabled && <div className="profile-form-grid">
-          <label>Début du jeûne<input type="time" value={profile.fastingStart??''} onChange={e=>patch('fastingStart',e.target.value||null)}/></label>
-          <label>Fin du jeûne<input type="time" value={profile.fastingEnd??''} onChange={e=>patch('fastingEnd',e.target.value||null)}/></label>
+          <label>Début du jeûne<input type="time" required={profile.fastingEnabled} value={profile.fastingStart??''} onChange={e=>patch('fastingStart',e.target.value||null)}/></label>
+          <label>Fin du jeûne<input type="time" required={profile.fastingEnabled} value={profile.fastingEnd??''} onChange={e=>patch('fastingEnd',e.target.value||null)}/></label>
         </div>}
         <div className="profile-section-title"><small>03 / PRÉFÉRENCES</small><h2>Mes habitudes</h2></div>
         <div className="profile-form-grid"><label>Fuseau horaire<input value={profile.timeZone} onChange={e=>patch('timeZone',e.target.value)} required/></label></div>
         <label className="profile-notes">Notes et préférences personnelles<textarea maxLength={1200} rows={4} value={profile.notes} onChange={e=>patch('notes',e.target.value)} placeholder="Mes aliments habituels, mes préférences, mes objectifs…"/></label>
         {error && <p className="profile-feedback error" role="alert">{error}</p>}
         {message && <p className="profile-feedback" role="status">{message}</p>}
-        <button type="submit" className="profile-save" disabled={saving}>{saving?'Enregistrement…':'Enregistrer mon profil'}</button>
       </section>
+      </fieldset>
+      <button type="submit" className="profile-save profile-save-submit" disabled={saving||photoProcessing}>{photoProcessing?'Traitement de la photo…':saving?'Enregistrement…':'Enregistrer mon profil'}</button>
     </form>}
   </div>
 }

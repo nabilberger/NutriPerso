@@ -29,16 +29,23 @@ export default function WeightTracking(){
   const [weight,setWeight]=useState('')
   const [note,setNote]=useState('')
   const [loading,setLoading]=useState(true)
+  const [historyUnavailable,setHistoryUnavailable]=useState(false)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState('')
   const [message,setMessage]=useState('')
   useEffect(()=>{
     let live=true
-    void Promise.all([
+    void Promise.allSettled([
       requestPrivateJson<{measurements:Measurement[]}>('/api/private/measurements'),
       requestPrivateJson<{profile:Profile}>('/api/private/profile')
-    ]).then(([measurements,profile])=>{if(live){setItems(measurements.measurements);setGoal(profile.profile.targetWeightKg)}})
-      .catch(e=>{if(live)setError(e instanceof Error?e.message:'Suivi inaccessible.')})
+    ]).then(([measurements,profile])=>{if(live){
+      const errors:string[]=[]
+      if(measurements.status==='fulfilled')setItems(measurements.value.measurements)
+      else {setHistoryUnavailable(true);errors.push(measurements.reason instanceof Error?measurements.reason.message:'Historique du poids inaccessible.')}
+      if(profile.status==='fulfilled')setGoal(profile.value.profile.targetWeightKg)
+      else errors.push('Objectif du profil inaccessible.')
+      setError(errors.join(' '))
+    }})
       .finally(()=>{if(live)setLoading(false)})
     return()=>{live=false}
   },[])
@@ -74,16 +81,17 @@ export default function WeightTracking(){
       <div className="weight-accent"><small>VOTRE PROGRESSION</small><p>La constance compte davantage que les fluctuations quotidiennes.</p></div>
     </div>
     <div className="weight-layout">
-      <section className="data-card"><h2>Courbe de poids</h2>{loading?<p className="data-muted">Chargement…</p>:<WeightChart items={items} target={goal}/>}</section>
+      <section className="data-card"><h2>Courbe de poids</h2>{loading?<p className="data-muted">Chargement…</p>:historyUnavailable?<div className="data-empty" role="status">La courbe est indisponible tant que l’historique ne peut pas être chargé.</div>:<WeightChart items={items} target={goal}/>}</section>
       <section className="data-card"><h2>Ajouter une mesure</h2><form onSubmit={e=>void submit(e)} className="measurement-form">
         <label>Date<input type="date" value={date} onChange={e=>setDate(e.target.value)} required /></label>
         <label>Poids (kg)<input type="number" min="25" max="350" step="0.1" value={weight} onChange={e=>setWeight(e.target.value)} required placeholder="Ex. 75,0"/></label>
         <label>Note facultative<input type="text" maxLength={300} value={note} onChange={e=>setNote(e.target.value)} placeholder="Après entraînement, matin…"/></label>
-        <button type="submit" disabled={saving}>{saving?'Enregistrement…':'Enregistrer la mesure'}</button>
+        <button type="submit" disabled={saving||loading}>{saving?'Enregistrement…':'Enregistrer la mesure'}</button>
       </form></section>
     </div>
     <section className="data-card weight-history"><h2>Historique de mes mesures</h2>
-      {items.length===0?<div className="data-empty">Votre historique apparaîtra ici après la première saisie.</div>
+      {historyUnavailable?<div className="data-empty" role="status">L’historique est temporairement indisponible. Réessayez plus tard.</div>
+      :items.length===0?<div className="data-empty">Votre historique apparaîtra ici après la première saisie.</div>
       :<div className="measurement-list">{items.map(m=><div key={m.id}><time>{m.measuredOn}</time><strong>{m.weightKg.toFixed(1)} kg</strong><span>{m.note}</span><button type="button" onClick={()=>void remove(m.id)} aria-label={'Supprimer la mesure du '+m.measuredOn}>Supprimer</button></div>)}</div>}
     </section>
   </div>

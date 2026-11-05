@@ -18,46 +18,48 @@ export function FoodExplorer(){
   const [foods,setFoods]=useState<SearchFood[]>([])
   const [total,setTotal]=useState(0)
   const [selected,setSelected]=useState<FoodDetail|null>(null)
-  const [loading,setLoading]=useState(false)
+  const [searching,setSearching]=useState(false)
+  const [loadingFdcId,setLoadingFdcId]=useState<number|null>(null)
+  const [searchUnavailable,setSearchUnavailable]=useState(false)
   const [error,setError]=useState('')
   async function search(e:FormEvent<HTMLFormElement>){
     e.preventDefault();const q=query.trim();if(q.length<2){setError('Saisissez au moins deux caractères.');return}
-    setLoading(true);setError('');setSelected(null);setSearched(q)
+    setSearching(true);setSearchUnavailable(false);setError('');setSelected(null);setFoods([]);setTotal(0);setSearched(q)
     try{
       const response=await fetch('/api/foods/search?q='+encodeURIComponent(q)+'&pageSize=25',{cache:'no-store'})
       if(!response.ok)throw new Error('La recherche des aliments est momentanément indisponible.')
       const data=await response.json() as SearchResponse
       setFoods(data.foods);setTotal(data.totalHits)
-    }catch(e){setError(e instanceof Error?e.message:'Erreur de recherche.')}
-    finally{setLoading(false)}
+    }catch(e){setSearchUnavailable(true);setError(e instanceof Error?e.message:'Erreur de recherche.')}
+    finally{setSearching(false)}
   }
   async function choose(food:SearchFood){
-    setLoading(true);setError('')
+    setLoadingFdcId(food.fdcId);setSelected(null);setError('')
     try{
       const response=await fetch('/api/foods/'+food.fdcId,{cache:'no-store'})
       if(!response.ok)throw new Error('La fiche nutritionnelle est indisponible.')
       setSelected(await response.json() as FoodDetail)
     }catch(e){setError(e instanceof Error?e.message:'Fiche indisponible.')}
-    finally{setLoading(false)}
+    finally{setLoadingFdcId(null)}
   }
   return <div className="data-page">
     <div className="data-heading"><small>CATALOGUE NUTRITIONNEL</small><h1>Explorez <em>vos aliments.</em></h1><p>Retrouvez les compositions nutritionnelles de référence dans FoodData Central.</p></div>
     <form onSubmit={e=>void search(e)} className="food-search">
       <label htmlFor="food-q">Rechercher un aliment</label>
-      <div><input id="food-q" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Ex. lentilles, sardines, poulet…"/><button type="submit" disabled={loading}>{loading?'Recherche…':'Rechercher'}</button></div>
+      <div><input id="food-q" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Ex. lentilles, sardines, poulet…"/><button type="submit" disabled={searching}>{searching?'Recherche…':'Rechercher'}</button></div>
     </form>
     {error&&<p role="alert" className="data-error">{error}</p>}
-    <div className="food-layout"><section className="data-card">
+    <div className="food-layout"><section className="data-card" aria-busy={searching}>
       <h2>{searched ? 'Résultats pour « '+searched+' »' : 'Commencez votre recherche'}</h2>
       {searched&&<p className="data-muted">{total} aliment(s) trouvé(s) — premiers résultats</p>}
-      {foods.length===0?<div className="data-empty">{searched?'Aucun résultat dans la sélection.':'Cherchez un aliment pour consulter ses valeurs de référence.'}</div>:
-        <div className="food-results">{foods.map(food=><button key={food.fdcId} type="button" className={food.fdcId===selected?.fdcId?'food-result selected':'food-result'} onClick={()=>void choose(food)}>
+      {searching?<div className="data-empty" role="status">Recherche des aliments…</div>:foods.length===0?<div className="data-empty">{searchUnavailable?'Les résultats ne sont pas disponibles pour le moment.':searched?'Aucun résultat dans la sélection.':'Cherchez un aliment pour consulter ses valeurs de référence.'}</div>:
+        <div className="food-results">{foods.map(food=><button key={food.fdcId} type="button" disabled={searching||loadingFdcId!==null} aria-pressed={food.fdcId===selected?.fdcId} className={food.fdcId===selected?.fdcId?'food-result selected':'food-result'} onClick={()=>void choose(food)}>
           <b>{food.description}</b><small>{food.brandOwner??(food.foodCategory==='generic'?'Aliment générique':'Produit de marque')}</small>
         </button>)}</div>}
     </section>
-    <section className="data-card">
+    <section className="data-card" aria-busy={loadingFdcId!==null}>
       <h2>Fiche nutritionnelle</h2>
-      {!selected?<div className="data-empty">Sélectionnez un aliment pour voir ses valeurs.</div>:<>
+      {loadingFdcId!==null?<div className="data-empty" role="status">Chargement de la fiche nutritionnelle…</div>:!selected?<div className="data-empty">Sélectionnez un aliment pour voir ses valeurs.</div>:<>
         <h3>{selected.description}</h3><p className="data-muted">Valeurs de référence fournies par l'USDA. Une base inconnue reste non calculable.</p>
         <div className="nutrients-grid">
           {([['Énergie',selected.keyNutrients.energy],['Protéines',selected.keyNutrients.protein],['Glucides',selected.keyNutrients.carbohydrates],['Lipides',selected.keyNutrients.fat],['Fibres',selected.keyNutrients.fiber]] as const).map(([label,n])=><div key={label}><small>{label}</small><strong>{labelNumber(n)}</strong><span>{n?.basis?'pour '+n.basis.quantity+' '+n.basis.unit:'Base non établie'}</span></div>)}

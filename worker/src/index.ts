@@ -92,6 +92,7 @@ app.get('/api/private/measurements', async (c) => {
 app.post('/api/private/measurements', async (c) => {
   let input:unknown
   try {input=await c.req.json()} catch{return c.json({error:{code:'INVALID_MEASUREMENT',message:'Une mesure JSON est attendue.'}},400)}
+  if (containsUserId(input)) return c.json({error:{code:'AUTH_FORBIDDEN',message:'L’identité utilisateur provient exclusivement de la session Auth.'}},403)
   try {return c.json({measurement:await addMeasurement(c.env,c.get('userScope').userId,input,fetcher)},201)}
   catch(error){return respondProfileError(c,error)}
 })
@@ -109,6 +110,7 @@ app.put('/api/private/profile', async (c) => {
   let payload: unknown
   try { payload = await c.req.json() }
   catch { return c.json({ error: { code: 'INVALID_PROFILE', message: 'Le profil doit être un objet JSON.' } }, 400) }
+  if (containsUserId(payload)) return c.json({ error: { code: 'AUTH_FORBIDDEN', message: 'L’identité utilisateur provient exclusivement de la session Auth.' } }, 403)
   try { return c.json({ profile: await saveProfile(c.env, c.get('userScope').userId, payload, fetcher) }) }
   catch (error) { return respondProfileError(c, error) }
 })

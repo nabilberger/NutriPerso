@@ -40,5 +40,7 @@ test('profile rejects invalid preferences before remote request',async()=>{
   await assert.rejects(saveProfile(env,userId,{...sample,mealsPerDay:0},fetcher),ProfileError)
   await assert.rejects(saveProfile(env,userId,{...sample,avatarDataUrl:'data:image/svg+xml;base64,dGVzdA=='},fetcher),ProfileError)
   await assert.rejects(saveProfile(env,userId,{...sample,timeZone:'invalid_zone'},fetcher),ProfileError)
+  await assert.rejects(saveProfile(env,userId,{...sample,fastingStart:null},fetcher),ProfileError)
+  await assert.rejects(saveProfile(env,userId,{...sample,fastingEnabled:true,fastingEnd:null},fetcher),ProfileError)
   assert.equal(called,false)
 })

@@ -133,3 +133,32 @@ test('cross-user reads are indistinguishable from missing rows and remain scoped
   assert.equal(reads[0]?.searchParams.get('user_id'), `eq.${userA}`)
   assert.equal(reads[1]?.searchParams.get('user_id'), `eq.${userB}`)
 })
+
+test('profile and weight routes reject client ownership and persist only under the verified JWT identity', async () => {
+  const writes: Array<{ table: string; row: Record<string, unknown> }> = []
+  const app = createWorkerApp({ fetcher: async (input, init = {}) => {
+    const url = new URL(input instanceof Request ? input.url : String(input))
+    if (url.pathname.endsWith('/auth/v1/user')) return authResponse(jwtA)
+    const table = url.pathname.endsWith('/user_profiles') ? 'user_profiles' : 'body_measurements'
+    const row = JSON.parse(String(init.body)) as Record<string, unknown>
+    writes.push({ table, row })
+    return Response.json([{ ...row, id: row.id ?? userA, fasting_start: row.fasting_start, fasting_end: row.fasting_end }])
+  } })
+  const auth = { Authorization: `Bearer ${jwtA}`, 'Content-Type': 'application/json' }
+  const profile = {
+    displayName: 'Invité', avatarDataUrl: null, heightCm: null, targetWeightKg: null, goal: 'maintain',
+    dietaryPattern: 'other', mealsPerDay: 2, fastingEnabled: false, fastingStart: null, fastingEnd: null,
+    avoidAddedSalt: false, avoidAddedSugar: false, notes: '', timeZone: 'Africa/Casablanca',
+  }
+  const forgedProfile = await app.request('/api/private/profile', { method: 'PUT', headers: auth, body: JSON.stringify({ ...profile, user_id: userB }) }, env)
+  const forgedMeasurement = await app.request('/api/private/measurements', { method: 'POST', headers: auth, body: JSON.stringify({ measuredOn: '2026-11-04', weightKg: 75, userId: userB }) }, env)
+  assert.equal(forgedProfile.status, 403)
+  assert.equal(forgedMeasurement.status, 403)
+  assert.equal(writes.length, 0)
+
+  const savedProfile = await app.request('/api/private/profile', { method: 'PUT', headers: auth, body: JSON.stringify(profile) }, env)
+  const savedMeasurement = await app.request('/api/private/measurements', { method: 'POST', headers: auth, body: JSON.stringify({ measuredOn: '2026-11-04', weightKg: 75, note: '' }) }, env)
+  assert.equal(savedProfile.status, 200)
+  assert.equal(savedMeasurement.status, 201)
+  assert.deepEqual(writes.map(({ table, row }) => [table, row.user_id]), [['user_profiles', userA], ['body_measurements', userA]])
+})
