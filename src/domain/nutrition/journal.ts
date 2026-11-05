@@ -226,6 +226,17 @@ export function createMeal(
   return replaceDay(state, { ...day, revision: day.revision + 1, meals: sortMeals([...day.meals, meal]) })
 }
 
+/** Removes an unconfirmed meal from a day draft without touching confirmed history. */
+export function removeMealDraft(state: JournalState, dayId: string, mealId: string): JournalState {
+  const day = requireDay(state, dayId)
+  requireMeal(day, mealId)
+  return replaceDay(state, {
+    ...day,
+    revision: day.revision + 1,
+    meals: day.meals.filter((meal) => meal.id !== mealId),
+  })
+}
+
 export function addFoodJournalItem(
   state: JournalState,
   dayId: string,
@@ -321,6 +332,22 @@ export function setMealOccurredAt(state: JournalState, dayId: string, mealId: st
   const day = requireDay(state, dayId)
   const normalized = normalizeOccurredAt(occurredAt, day.localDate, day.timeZone)
   return updateMeal(state, dayId, mealId, (meal) => ({ ...meal, occurredAt: normalized }))
+}
+
+export function updateMealDetails(
+  state: JournalState,
+  dayId: string,
+  mealId: string,
+  changes: { readonly kind?: MealKind; readonly label?: string | null; readonly occurredAt?: string | null },
+): JournalState {
+  const day = requireDay(state, dayId)
+  const occurredAt = changes.occurredAt === undefined ? undefined : normalizeOccurredAt(changes.occurredAt, day.localDate, day.timeZone)
+  return updateMeal(state, dayId, mealId, (meal) => ({
+    ...meal,
+    ...(changes.kind !== undefined ? { kind: changes.kind } : {}),
+    ...(changes.label !== undefined ? { label: changes.label?.trim() || null } : {}),
+    ...(occurredAt !== undefined ? { occurredAt } : {}),
+  }))
 }
 
 export function updateJournalDayContext(state: JournalState, dayId: string, localDate: string, timeZone: string): JournalState {
@@ -484,6 +511,33 @@ export function calculateJournalDay(state: JournalState, dayId: string): Partial
       return [[rawCode, hydrateContribution(contribution, rawCode as NutrientCode)]]
     })) as NutrientComponent['nutrients'],
   })))
+  return aggregateNutrients(components, NUTRIENT_CODES, { includeExact: true })
+}
+
+/** Live day preview: active confirmed snapshots plus current drafts, using the same exact aggregator. */
+export function calculateJournalDayPreview(
+  state: JournalState,
+  dayId: string,
+  sources: JournalCalculationSources,
+): Partial<Record<NutrientCode, NutrientTotal>> {
+  const day = requireDay(state, dayId)
+  const replacedSnapshots = new Set(day.meals.flatMap((meal) => meal.supersedesSnapshotId ? [meal.supersedesSnapshotId] : []))
+  const components: NutrientComponent[] = selectActiveMealSnapshots(state.snapshots)
+    .filter((snapshot) => snapshot.dayId === dayId && snapshot.localDate === day.localDate && snapshot.timeZone === day.timeZone
+      && !replacedSnapshots.has(snapshot.snapshotId))
+    .flatMap((snapshot) => snapshot.items.map((item) => ({
+      itemId: `${snapshot.snapshotId}/${item.id}`,
+      nutrients: Object.fromEntries(Object.entries(item.contributions).flatMap(([rawCode, contribution]) => {
+        if (!contribution) return []
+        return [[rawCode, hydrateContribution(contribution, rawCode as NutrientCode)]]
+      })) as NutrientComponent['nutrients'],
+    })))
+  for (const meal of day.meals) {
+    const calculation = calculateJournalMeal(state, dayId, meal.id, sources)
+    for (const entry of calculation.items) {
+      components.push({ itemId: `${meal.id}/${entry.item.id}`, nutrients: entry.contributions })
+    }
+  }
   return aggregateNutrients(components, NUTRIENT_CODES, { includeExact: true })
 }
 

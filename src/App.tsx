@@ -5,6 +5,7 @@ import WeightTracking from './WeightTracking'
 import { requestPrivateJson } from './auth/client'
 import { AuthGate, useAuth } from './auth/AuthProvider'
 import { nextAccountMenuIndex } from './account-menu-navigation'
+import Journal from './Journal'
 
 const sections = [
   { id: 'home', label: 'Vue d’ensemble', icon: '⌂' },
@@ -21,10 +22,10 @@ const todayLabel = () => new Intl.DateTimeFormat('fr-MA', { weekday: 'long', day
 const todayEyebrow = () => todayLabel().toLocaleUpperCase('fr-MA')
 
 export default function App() {
-  return <AuthGate>{(session) => <AuthenticatedApp email={session.user.email} />}</AuthGate>
+  return <AuthGate>{(session) => <AuthenticatedApp email={session.user.email} userId={session.user.id} />}</AuthGate>
 }
 
-function AuthenticatedApp({ email }: { readonly email: string | null }) {
+function AuthenticatedApp({ email, userId }: { readonly email: string | null; readonly userId: string }) {
   const { signOut } = useAuth()
   const [active, setActive] = useState<Section>('home')
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
@@ -94,7 +95,7 @@ function AuthenticatedApp({ email }: { readonly email: string | null }) {
   return <div className="shell">
     <aside className="sidebar"><a className="brand" href="#home" onClick={() => setActive('home')}><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></a><p className="nav-label">ESPACE PERSONNEL</p><nav>{sections.filter((item) => item.id !== 'profile').map((item) => <button key={item.id} className={active === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActive(item.id)}><span className="nav-icon">{item.icon}</span>{item.label}{active === item.id && <i />}</button>)}</nav><div className="sidebar-bottom"><div className="aside-note"><span>✧</span><p><b>À votre rythme.</b><br/>Un petit pas compte aussi.</p></div><button ref={sidebarAccountTriggerRef} className="profile profile-entry" type="button" onClick={toggleAccountMenu} aria-haspopup="menu" aria-expanded={accountMenuOpen} aria-controls="nutrip-account-menu" aria-label="Ouvrir le menu utilisateur"><span className="avatar">{avatar}</span><span><b>{displayName}</b><small>{email ?? 'Mon compte'}</small></span><span className="profile-chevron" aria-hidden="true">⌄</span></button></div></aside>
     <main><header className="topbar"><div className="mobile-brand"><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></div><div className="crumb">Mon espace <span>/</span> <b>{current?.label}</b></div><div className="top-actions"><span className="today">{todayLabel()}</span><button className="coach-button" type="button" aria-label="Ouvrir Coach IA" onClick={() => setActive('coach')}><span aria-hidden="true">✳</span><b>Coach IA</b></button><button ref={headerAccountTriggerRef} type="button" className="avatar small profile-shortcut" onClick={toggleAccountMenu} title="Menu utilisateur" aria-label="Ouvrir le menu utilisateur" aria-haspopup="menu" aria-expanded={accountMenuOpen} aria-controls="nutrip-account-menu">{avatar}</button></div>{accountMenuOpen && <div ref={accountMenuRef} id="nutrip-account-menu" className="account-menu" role="menu" aria-label="Menu utilisateur" onKeyDown={handleAccountMenuKeyDown}><div className="account-menu-info" role="none"><b>{displayName}</b><small>{email}</small></div><button ref={(element) => { accountMenuItemsRef.current[0] = element }} role="menuitem" type="button" onClick={() => navigateFromAccountMenu('profile')}>Mon profil et préférences</button><button ref={(element) => { accountMenuItemsRef.current[1] = element }} role="menuitem" type="button" onClick={() => {setAccountMenuOpen(false);void signOut()}}>Se déconnecter</button></div>}</header>
-    {active === 'home' ? <Dashboard navigate={setActive}/> : active === 'profile' ? <ProfileSettings email={email} onSaved={onProfileSaved} /> : active === 'catalog' ? <FoodExplorer /> : active === 'recipes' ? <RecipeLibrary /> : active === 'tracking' ? <WeightTracking /> : <section className="placeholder"><span className="placeholder-icon">✳</span><small>NUTRIPERSO</small><h1>{current?.label}</h1><p>Cet espace est en cours de connexion au moteur nutritionnel.<br/>Les données affichées seront issues de votre journal, sans valeurs inventées.</p><span className="status"><i/>Fonction en préparation</span></section>}
+    {active === 'home' ? <Dashboard navigate={setActive}/> : active === 'journal' ? <Journal userId={userId}/> : active === 'profile' ? <ProfileSettings email={email} onSaved={onProfileSaved} /> : active === 'catalog' ? <FoodExplorer /> : active === 'recipes' ? <RecipeLibrary /> : active === 'tracking' ? <WeightTracking /> : <section className="placeholder"><span className="placeholder-icon">✳</span><small>NUTRIPERSO</small><h1>{current?.label}</h1><p>Cet espace est en cours de connexion au moteur nutritionnel.<br/>Les données affichées seront issues de votre journal, sans valeurs inventées.</p><span className="status"><i/>Fonction en préparation</span></section>}
     <footer>NutriPerso <span>·</span> Votre espace, vos repères.</footer></main>
     <nav className="mobile-nav" aria-label="Navigation principale">{[sections[1], sections[4], sections[0], sections[5], sections[3]].map((item) => <button key={item.id} className={`mobile-link${item.id === 'home' ? ' home-link' : ''}${active === item.id ? ' active' : ''}`} onClick={() => setActive(item.id)} aria-current={active === item.id ? 'page' : undefined}><span aria-hidden="true">{item.icon}</span><small>{item.id === 'home' ? 'Accueil' : item.label}</small></button>)}</nav>
   </div>

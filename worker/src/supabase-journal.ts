@@ -122,6 +122,32 @@ export async function getJournalPersistence(
   return { day, snapshots }
 }
 
+/** Loads the unique user's journal day for an ISO civil date. */
+export async function getJournalPersistenceForDate(
+  env: JournalPersistenceEnv, scope: JournalUserScope, localDate: string, fetcher: typeof fetch = fetch,
+): Promise<PersistedJournal | null> {
+  assertUserId(scope.userId)
+  let validDate = false
+  if (/^\d{4}-\d{2}-\d{2}$/.test(localDate)) {
+    try { validDate = new Date(localDate + 'T00:00:00Z').toISOString().slice(0, 10) === localDate } catch { validDate = false }
+  }
+  if (!validDate) throw new JournalPersistenceError('INVALID_JOURNAL', 'La date doit être une date ISO valide.')
+  const url = restUrl(env, 'journal_days')
+  url.searchParams.set('select', 'id,user_id')
+  url.searchParams.set('local_date', `eq.${localDate}`)
+  url.searchParams.set('user_id', `eq.${scope.userId}`)
+  url.searchParams.set('limit', '2')
+  const rows = await requestJson<unknown[]>(url, env, fetcher)
+  if (!Array.isArray(rows)) throw new JournalPersistenceError('REMOTE_ERROR', 'La réponse de journée Supabase est invalide.')
+  if (rows.length > 1) throw new JournalPersistenceError('REMOTE_ERROR', 'Plusieurs brouillons existent pour la même journée.')
+  const row = rows[0]
+  if (!row) return null
+  if (!isRecord(row) || row.user_id !== scope.userId || typeof row.id !== 'string') {
+    throw new JournalPersistenceError('REMOTE_ERROR', 'Supabase a retourné une journée invalide.')
+  }
+  return getJournalPersistence(env, scope, row.id, fetcher)
+}
+
 /** Selects the active confirmed heads; void and superseded versions remain historical only. */
 export async function getActiveJournalSnapshots(env: JournalPersistenceEnv, scope: JournalUserScope, fetcher: typeof fetch = fetch): Promise<readonly ConfirmedMealSnapshot[]> {
   assertUserId(scope.userId)

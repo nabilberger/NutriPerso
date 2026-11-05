@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createJournalDay, createJournalState } from '../../src/domain/nutrition/journal.ts'
+import { addFoodJournalItem, createJournalDay, createJournalState, createMeal } from '../../src/domain/nutrition/journal.ts'
 import { createWorkerApp } from '../src/index.ts'
 
 const userA = '2fa33744-d81b-4403-9482-e6a7af550001'
@@ -161,4 +161,97 @@ test('profile and weight routes reject client ownership and persist only under t
   assert.equal(savedProfile.status, 200)
   assert.equal(savedMeasurement.status, 201)
   assert.deepEqual(writes.map(({ table, row }) => [table, row.user_id]), [['user_profiles', userA], ['body_measurements', userA]])
+})
+
+
+test('private journal confirmation fetches full USDA detail and ignores no client nutrition totals', async () => {
+  const dayWithMeal = createMeal(createJournalDay(createJournalState(), {
+    id: dayId, localDate: '2026-11-04', timeZone: 'UTC',
+  }), dayId, { id: 'meal-usda', kind: 'lunch', occurredAt: '2026-11-04T12:00:00Z' })
+  const draft = addFoodJournalItem(dayWithMeal, dayId, 'meal-usda', {
+    id: 'item-usda', foodId: 'usda:2706091',
+    quantity: { kind: 'physical', amount: '100', unit: 'g', weightNature: 'edible' }, sortOrder: 0,
+  }).days[0]!
+  const calls: string[] = []
+  let storedSnapshot: Record<string, unknown> | null = null
+  const app = createWorkerApp({ fetcher: async (input, init = {}) => {
+    const url = new URL(input instanceof Request ? input.url : String(input))
+    calls.push(url.pathname)
+    if (url.pathname.endsWith('/auth/v1/user')) return authResponse(jwtA)
+    if (url.hostname === 'api.nal.usda.gov') {
+      assert.equal(url.pathname, '/fdc/v1/food/2706091')
+      return Response.json({
+        fdcId: 2706091, description: 'Chicken, ground', dataType: 'Survey (FNDDS)', foodCategory: 'Poultry',
+        foodNutrients: [
+          { nutrient: { id: 1008, name: 'Energy', unitName: 'kcal' }, amount: 201 },
+          { nutrient: { id: 1003, name: 'Protein', unitName: 'g' }, amount: 27.1 },
+          { nutrient: { id: 1005, name: 'Carbohydrate', unitName: 'g' }, amount: 0 },
+          { nutrient: { id: 1004, name: 'Total lipid', unitName: 'g' }, amount: 10.3 },
+          { nutrient: { id: 1079, name: 'Fiber', unitName: 'g' }, amount: 0 },
+        ],
+      })
+    }
+    if (url.pathname.endsWith('/journal_days')) {
+      const id = url.searchParams.get('id')?.replace(/^eq\./, '')
+      return Response.json([{ id: dayId, user_id: userA, draft }].filter((row) => !id || row.id === id).map((row) => ({ draft: row.draft, user_id: row.user_id, id: row.id })))
+    }
+    if (url.pathname.endsWith('/journal_meal_snapshots')) return Response.json([])
+    if (url.pathname.endsWith('/rpc/append_journal_snapshot')) {
+      const body = JSON.parse(String(init.body)) as { p_user_id: string; p_snapshot: Record<string, unknown> }
+      assert.equal(body.p_user_id, userA)
+      storedSnapshot = body.p_snapshot
+      return Response.json([{ user_id: userA, snapshot: body.p_snapshot }])
+    }
+    return Response.json({ message: 'unexpected' }, { status: 404 })
+  } })
+  const response = await app.request(`/api/private/journal/${dayId}/meals/meal-usda/confirm`, {
+    method: 'POST', headers: { Authorization: `Bearer ${jwtA}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snapshotId: 'journal-usda-snapshot', confirmedAt: '2026-11-04T12:30:00Z', engineVersion: 'nutrition-engine-v1' }),
+  }, { ...env, FDC_API_KEY: 'DEMO_KEY' })
+  assert.equal(response.status, 200)
+  const payload = await response.json() as { snapshot: { status: string; items: Array<{ foodSnapshot: { description: string; nutrients: Array<{ sourceValue?: string }> } }>; totals: Record<string, { status: string; value?: string }> } }
+  assert.equal(payload.snapshot.status, 'confirmed')
+  assert.equal(payload.snapshot.items[0]?.foodSnapshot.description, 'Chicken, ground')
+  assert.equal(payload.snapshot.items[0]?.foodSnapshot.nutrients.find((datum) => datum.sourceValue === '27.1')?.sourceValue, '27.1')
+  assert.equal(payload.snapshot.totals.energy?.status, 'complete')
+  assert.equal(payload.snapshot.totals.energy?.value, '201.000000')
+  assert.equal(payload.snapshot.totals.carbohydrate?.value, '0.000000')
+  assert.ok(storedSnapshot)
+  assert.ok(calls.indexOf('/fdc/v1/food/2706091') > calls.indexOf('/rest/v1/journal_meal_snapshots'))
+  assert.ok(calls.some((path) => path.endsWith('/rpc/append_journal_snapshot')))
+
+  const forgedCalls: string[] = []
+  const forgedApp = createWorkerApp({ fetcher: async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input)); forgedCalls.push(url.pathname)
+    return url.pathname.endsWith('/auth/v1/user') ? authResponse(jwtA) : Response.json([])
+  } })
+  const forged = await forgedApp.request(`/api/private/journal/${dayId}/meals/meal-usda/confirm`, {
+    method: 'POST', headers: { Authorization: `Bearer ${jwtA}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ snapshotId: 'fake', confirmedAt: '2026-11-04T12:30:00Z', engineVersion: 'nutrition-engine-v1', totals: { energy: 9999 } }),
+  }, { ...env, FDC_API_KEY: 'DEMO_KEY' })
+  assert.equal(forged.status, 400)
+  assert.deepEqual(forgedCalls, ['/auth/v1/user'])
+})
+
+test('journal date lookup is authenticated and scopes the date query to the verified user', async () => {
+  const calls: URL[] = []
+  const app = createWorkerApp({ fetcher: async (input, init = {}) => {
+    const url = new URL(input instanceof Request ? input.url : String(input)); calls.push(url)
+    if (url.pathname.endsWith('/auth/v1/user')) return authResponse(jwtA)
+    if (url.pathname.endsWith('/journal_days')) {
+      if (url.searchParams.has('local_date')) {
+        assert.equal(url.searchParams.get('local_date'), 'eq.2026-11-04')
+        assert.equal(url.searchParams.get('user_id'), `eq.${userA}`)
+        return Response.json([{ id: dayId, user_id: userA }])
+      }
+      return Response.json([{ id: dayId, user_id: userA, draft: dayDraft }])
+    }
+    if (url.pathname.endsWith('/journal_meal_snapshots')) return Response.json([])
+    return Response.json({ message: 'unexpected' }, { status: 404 })
+  } })
+  const response = await app.request('/api/private/journal?date=2026-11-04', { headers: { Authorization: `Bearer ${jwtA}` } }, env)
+  assert.equal(response.status, 200)
+  assert.equal((await response.json() as { journal: { day: { id: string } } }).journal.day.id, dayId)
+  const dateRead = calls.find((url) => url.searchParams.has('local_date'))
+  assert.equal(dateRead?.searchParams.get('user_id'), `eq.${userA}`)
 })
