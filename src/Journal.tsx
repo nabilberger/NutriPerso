@@ -316,13 +316,13 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
           return [recipeId, latest] as const
         }))
         const recipes = Object.fromEntries(recipeEntries)
-        const state = buildMealReuseDraft(
+        const reusedState = buildMealReuseDraft(
           { days: day ? [day] : [], snapshots: cacheNow.snapshots },
           { id: day?.id ?? crypto.randomUUID(), localDate: today, timeZone },
           reuseRequest.source, recipes, () => crypto.randomUUID(),
         )
         if (cancelled) return
-        const nextDay = state.days.find((entry) => entry.id === day!.id)!
+        const nextDay = reusedState.days.find((entry) => entry.id === day!.id)!
         const currentFoods = { ...cacheNow.sources }
         for (const item of reuseRequest.source.items) if (item.kind === 'food') delete currentFoods[item.foodId]
         commit({ ...cacheNow, day: nextDay, sources: currentFoods, dirty: true })
