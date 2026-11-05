@@ -88,4 +88,4 @@ Cette version n’a pas les routes profil/mesures et peut être incompatible ave
 
 ## Périmètre réalisé
 
-Les inspections ayant servi à ce plan sont en lecture seule. Aucune réparation d’historique, migration distante, écriture de données, fusion, mise en production, commit ou push n’a été effectuée.
+Les inspections ayant servi à ce plan sont en lecture seule. Le seul changement GitHub de cette mission est l’ajout de ce document à la branche de la PR #14. Aucune réparation d’historique, migration distante, écriture de données, fusion ni mise en production n’a été effectuée.
