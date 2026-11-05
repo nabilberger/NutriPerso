@@ -17,3 +17,16 @@ create index meal_templates_user_updated_idx on public.meal_templates(user_id, u
 alter table public.meal_templates enable row level security;
 revoke all on public.meal_templates from public, anon, authenticated;
 grant select, insert, update, delete on public.meal_templates to service_role;
+
+create table public.meal_template_revisions (
+  template_id uuid not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  revision bigint not null check (revision > 0),
+  template jsonb not null check (jsonb_typeof(template) = 'object'),
+  created_at timestamptz not null default now(),
+  primary key (template_id, revision),
+  foreign key (user_id, template_id) references public.meal_templates(user_id, id) on delete cascade
+);
+alter table public.meal_template_revisions enable row level security;
+revoke all on public.meal_template_revisions from public, anon, authenticated;
+grant select, insert on public.meal_template_revisions to service_role;
