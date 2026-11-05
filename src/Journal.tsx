@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
-  addFoodJournalItem, calculateJournalDayPreview, calculateJournalMeal, cancelConfirmedMeal,
+  addFoodJournalItem, addRecipeJournalItem, calculateJournalDayPreview, calculateJournalMeal, cancelConfirmedMeal,
   createJournalDay, createJournalState, createMeal, createMealCorrectionDraft, removeJournalItem,
   removeMealDraft, selectActiveMealSnapshots, setFoodJournalItemQuantity, updateMealDetails,
   type ConfirmedMealSnapshot, type JournalDayDraft, type JournalState, type MealKind,
@@ -290,6 +290,43 @@ export default function Journal({ userId }: { readonly userId: string }) {
       setAddingFoodTo(null)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'L’aliment n’a pas pu être ajouté.') }
   }
+
+  useEffect(() => {
+    const reuse = async (event: Event) => {
+      const source = (event as CustomEvent<ConfirmedMealSnapshot>).detail
+      if (!source || !Array.isArray(source.items)) return
+      try {
+        let day = cacheRef.current.day
+        let state: JournalState = { days: day ? [day] : [], snapshots: cacheRef.current.snapshots }
+        if (!day) {
+          const created = createJournalDay(state, { id: crypto.randomUUID(), localDate: todayIn(timeZone), timeZone })
+          day = created.days[0]!
+          state = created
+        }
+        const mealId = crypto.randomUUID()
+        state = createMeal(state, day.id, { id: mealId, kind: source.mealKind, label: source.label, occurredAt: new Date().toISOString() })
+        for (const item of source.items) {
+          const id = crypto.randomUUID()
+          if (item.kind === 'food') {
+            state = addFoodJournalItem(state, day.id, mealId, { id, foodId: item.foodId, quantity: item.enteredQuantity, sortOrder: item.sortOrder })
+          } else {
+            const current = await requestPrivateJson<{ snapshots: ConfirmedMealSnapshot[] }>(`/api/private/recipes/${encodeURIComponent(item.recipeSnapshot.recipe.id)}`)
+            const latest = current.snapshots.at(-1)
+            if (!latest || latest.status !== 'confirmed') throw new Error('La recette actuelle est indisponible.')
+            state = addRecipeJournalItem(state, day.id, mealId, { id, recipeSnapshot: latest as never, quantity: item.quantity, sortOrder: item.sortOrder })
+          }
+        }
+        const nextDay = state.days.find((entry) => entry.id === day!.id)!
+        const currentFoods = { ...cacheRef.current.sources }
+        for (const item of source.items) if (item.kind === 'food') delete currentFoods[item.foodId]
+        commit({ ...cacheRef.current, day: nextDay, sources: currentFoods, dirty: true, pendingConfirm: null, conflict: false })
+        setDate(nextDay.localDate)
+        setSyncMessage('Nouveau brouillon créé depuis un repas précédent. Vérifiez les quantités avant confirmation.')
+      } catch (reason) { setError(reason instanceof Error ? reason.message : 'Le repas n’a pas pu être repris.') }
+    }
+    window.addEventListener('nutrip:reuse-meal', reuse)
+    return () => window.removeEventListener('nutrip:reuse-meal', reuse)
+  }, [timeZone])
 
   async function attachPhoto(file: File | undefined) {
     if (!file) return
