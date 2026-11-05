@@ -27,25 +27,17 @@ export async function saveMealTemplate(env: SupabaseCatalogEnv, scope: MealTempl
     || typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 80
     || !Number.isSafeInteger(input.revision) || (input.revision as number) < 1) throw new MealTemplateError(400, 'Le modèle est invalide.')
   if (expectedRevision !== null && input.revision !== expectedRevision + 1) throw new MealTemplateError(409, 'La révision suivante est requise.')
-  const url = tableUrl(env)
-  if (expectedRevision !== null) {
-    url.searchParams.set('id', `eq.${input.id}`)
-    url.searchParams.set('user_id', `eq.${scope.userId}`)
-    url.searchParams.set('revision', `eq.${expectedRevision}`)
-  }
   const template = { ...input.meal, id: input.id, name: input.name.trim(), revision: input.revision }
-  const row = { id: input.id, user_id: scope.userId, name: input.name.trim(), revision: input.revision, template }
-  const response = await fetcher(url, { method: expectedRevision === null ? 'POST' : 'PATCH', headers: headers(env, 'return=representation'), body: JSON.stringify(row) })
-  if (response.status === 409 || response.status === 412) throw new MealTemplateError(409, 'Le modèle a été modifié ailleurs.')
-  if (!response.ok) throw new MealTemplateError(response.status, 'Le modèle n’a pas pu être enregistré.')
+  const url = new URL('/rest/v1/rpc/save_meal_template_atomic', env.SUPABASE_URL)
+  const response = await fetcher(url, { method: 'POST', headers: headers(env, 'return=representation'), body: JSON.stringify({
+    p_user_id: scope.userId, p_template_id: input.id, p_name: input.name.trim(),
+    p_revision: input.revision, p_template: template, p_expected_revision: expectedRevision,
+  }) })
+  if (response.status === 409 || response.status === 400) throw new MealTemplateError(409, 'Le modèle a été modifié ailleurs ou ses données sont invalides.')
+  if (!response.ok) throw new MealTemplateError(502, 'Le modèle et sa révision n’ont pas pu être enregistrés.')
   const rows = await response.json() as Row[]
   if (!Array.isArray(rows) || rows.length !== 1) throw new MealTemplateError(409, 'Révision du modèle incompatible.')
-  const saved = fromRow(rows[0]!, scope.userId)
-  const revisionUrl = new URL('/rest/v1/meal_template_revisions', env.SUPABASE_URL!)
-  const revisionResponse = await fetcher(revisionUrl, { method: 'POST', headers: headers(env, 'return=minimal'),
-    body: JSON.stringify({ template_id: saved.id, user_id: scope.userId, revision: saved.revision, template: saved.meal }) })
-  if (!revisionResponse.ok) throw new MealTemplateError(502, 'Le modèle a été enregistré, mais son historique n’a pas pu être conservé.')
-  return saved
+  return fromRow(rows[0]!, scope.userId)
 }
 export async function deleteMealTemplate(env: SupabaseCatalogEnv, scope: MealTemplateScope, id: string, fetcher: typeof fetch = fetch): Promise<void> {
   if (!isUuid(id)) throw new MealTemplateError(400, 'Identifiant de modèle invalide.')
