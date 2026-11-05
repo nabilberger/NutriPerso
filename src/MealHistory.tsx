@@ -83,6 +83,12 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Meal
         <div><b>{meal.label || meal.items.map((i) => i.kind === 'food' ? i.foodSnapshot.description : i.recipeSnapshot.recipe.name).join(', ')}</b><small>{meal.localDate} · {meal.mealKind} · confirmé</small></div>
         <button type="button" onClick={() => onReuse(snapshotToReuse(meal))}>Réutiliser</button><button type="button" onClick={() => { setSelected(meal); setName('') }}>Enregistrer comme modèle</button>
       </article>)}</div> : <div className="data-empty">Aucune consommation confirmée ne correspond à ces filtres.</div>}
+    </section>
+    <section className="data-card"><h2>Historique filtré</h2><p className="data-muted">Résultats selon votre recherche et les dates sélectionnées.</p>
+      {loading ? <p role="status">Recherche en cours…</p> : page.meals.length ? <div className="history-list">{page.meals.map((meal) => <article key={meal.snapshotId}>
+        <div><b>{meal.label || meal.items.map((i) => i.kind === 'food' ? i.foodSnapshot.description : i.recipeSnapshot.recipe.name).join(', ')}</b><small>{meal.localDate} · {meal.mealKind} · confirmé</small></div>
+        <button type="button" onClick={() => onReuse(snapshotToReuse(meal))}>Réutiliser</button><button type="button" onClick={() => { setSelected(meal); setName('') }}>Enregistrer comme modèle</button>
+      </article>)}</div> : <div className="data-empty">Aucun résultat pour ces filtres.</div>}
       <div className="history-pages"><button type="button" disabled={page.offset === 0 || loading} onClick={() => setPage((p) => ({ ...p, offset: Math.max(0, p.offset - 20) }))}>Précédent</button><span>{page.total ? page.offset + 1 : 0}–{Math.min(page.total, page.offset + 20)} / {page.total}</span><button type="button" disabled={page.offset + 20 >= page.total || loading} onClick={() => setPage((p) => ({ ...p, offset: p.offset + 20 }))}>Suivant</button></div>
     </section>
     <section className="data-card"><h2>Modèles enregistrés</h2>{templates.length ? <div className="history-list">{templates.map((item) => <article key={item.id}>
