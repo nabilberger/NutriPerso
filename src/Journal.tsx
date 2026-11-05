@@ -11,8 +11,9 @@ import type { NutrientTotal } from './domain/nutrition/types.ts'
 import { decimalToFraction, fractionToDecimal, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { requestPrivateJson } from './auth/client'
+import { loadFoodSources } from './journal-sources.ts'
 import './journal.css'
-import { archiveJournalCache, emptyJournalCache, journalCacheKey, readJournalCache, writeJournalCache, type JournalCacheRecord, type PendingJournalCancel } from './journal-cache.ts'
+import { emptyJournalCache, journalCacheKey, persistJournalCacheForKey, readJournalCache, resolveJournalCacheConflict, writeJournalCache, type JournalCacheRecord, type PendingJournalCancel } from './journal-cache.ts'
 
 type PersistedJournal = { readonly day: JournalDayDraft; readonly snapshots: readonly ConfirmedMealSnapshot[] }
 type JournalCache = JournalCacheRecord
@@ -44,19 +45,40 @@ export default function Journal({ userId }: { readonly userId: string }) {
   const [newMealTime, setNewMealTime] = useState(() => localDateTimeInput(new Date()))
   const [addingFoodTo, setAddingFoodTo] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
-  const syncLock = useRef(false)
+  const [storageError, setStorageError] = useState(false)
+  const storageErrorRef = useRef(false)
+  const syncLocks = useRef(new Set<string>())
   const cacheKey = journalCacheKey(userId, date)
+  const activeCacheKey = useRef(cacheKey)
+  const cacheRefKey = useRef(cacheKey)
+  activeCacheKey.current = cacheKey
 
-  const commit = useCallback((next: JournalCache) => {
-    cacheRef.current = next
-    setCache(next)
-    if (!writeJournalCache(localStorage, cacheKey, next)) setSyncMessage('Stockage local saturé : synchronisez avant de continuer.')
-  }, [cacheKey])
+  const commitForKey = useCallback((key: string, next: JournalCache) => {
+    const result = persistJournalCacheForKey(localStorage, key, activeCacheKey.current, next)
+    if (result.updateActiveView) {
+      cacheRef.current = next
+      cacheRefKey.current = key
+      setCache(next)
+      storageErrorRef.current = !result.persisted
+      setStorageError(!result.persisted)
+      if (!result.persisted) setSyncMessage(navigator.onLine
+        ? 'Écriture locale impossible. La modification reste en mémoire pendant la tentative de synchronisation.'
+        : 'Écriture locale impossible : cette modification n’est pas sauvegardée hors connexion.')
+    }
+    return result.persisted
+  }, [])
+  const commit = useCallback((next: JournalCache) => commitForKey(cacheKey, next), [cacheKey, commitForKey])
+  const setMessageForKey = useCallback((key: string, message: string) => {
+    if (activeCacheKey.current === key) setSyncMessage(message)
+  }, [])
 
   const sync = useCallback(async () => {
-    if (!navigator.onLine || syncLock.current || cacheRef.current.conflict) return
-    syncLock.current = true; setSyncing(true)
-    let working = cacheRef.current
+    const requestKey = cacheKey
+    if (!navigator.onLine || syncLocks.current.has(requestKey) || activeCacheKey.current !== requestKey) return
+    syncLocks.current.add(requestKey); setSyncing(true)
+    const inMemory = cacheRefKey.current === requestKey ? cacheRef.current : null
+    if (!inMemory) { syncLocks.current.delete(requestKey); setSyncing(syncLocks.current.size > 0); return }
+    let working = inMemory
     try {
       if (working.dirty && working.day && (working.day.meals.length > 0 || working.serverRevision > 0)) {
         const sentDay = working.day
@@ -64,20 +86,20 @@ export default function Journal({ userId }: { readonly userId: string }) {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ expectedRevision: working.serverRevision, draft: { ...sentDay, revision: working.serverRevision + 1 } }),
         })
-        const latest = cacheRef.current
+        const latest = cacheRefKey.current === requestKey ? cacheRef.current : (readJournalCache(localStorage, requestKey) ?? working)
         if (!latest.day || latest.day.revision !== sentDay.revision) {
           working = { ...latest, serverRevision: saved.draft.revision, dirty: true }
-          commit(working); setSyncMessage('Une nouvelle modification reste en attente de synchronisation.'); return
+          commitForKey(requestKey, working); setMessageForKey(requestKey, 'Une nouvelle modification reste en attente de synchronisation.'); return
         }
         working = { ...working, day: saved.draft, serverRevision: saved.draft.revision, dirty: false }
-        commit(working)
+        commitForKey(requestKey, working)
       } else if (working.dirty && !working.day) {
-        working = { ...working, dirty: false }; commit(working)
+        working = { ...working, dirty: false }; commitForKey(requestKey, working)
       }
       if (working.pendingConfirm) {
         const pending = working.pendingConfirm
         if (working.dirty || !working.day?.meals.some((meal) => meal.id === pending.mealId)) {
-          setSyncMessage('Confirmation en attente : le brouillon local reste conservé.')
+          setMessageForKey(requestKey, 'Confirmation en attente : le brouillon local reste conservé.')
         } else {
           const result = await requestPrivateJson<{ day: JournalDayDraft; snapshot: ConfirmedMealSnapshot }>(
             `/api/private/journal/${encodeURIComponent(working.day.id)}/meals/${encodeURIComponent(pending.mealId)}/confirm`,
@@ -87,64 +109,80 @@ export default function Journal({ userId }: { readonly userId: string }) {
           )
           working = { ...working, day: result.day, serverRevision: result.day.revision,
             snapshots: replaceSnapshot(working.snapshots, result.snapshot), pendingConfirm: null, dirty: false }
-          commit(working)
+          commitForKey(requestKey, working)
         }
       }
       for (const pending of working.pendingCancels) {
-        const result = await requestPrivateJson<{ snapshot: ConfirmedMealSnapshot }>(
+        const result = await requestPrivateJson<{ day: JournalDayDraft; snapshot: ConfirmedMealSnapshot }>(
           `/api/private/journal/snapshots/${encodeURIComponent(pending.snapshotId)}/cancel`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
             newSnapshotId: pending.newSnapshotId, confirmedAt: pending.confirmedAt, engineVersion: pending.engineVersion,
           }) },
         )
-        working = { ...working, snapshots: replaceSnapshot(working.snapshots, result.snapshot),
+        working = { ...working, day: result.day, serverRevision: result.day.revision, dirty: false,
+          snapshots: replaceSnapshot(working.snapshots, result.snapshot),
+          pendingConfirm: working.pendingConfirm?.mealId === result.snapshot.logicalMealId ? null : working.pendingConfirm,
           pendingCancels: working.pendingCancels.filter((item) => item.newSnapshotId !== pending.newSnapshotId) }
-        commit(working)
+        commitForKey(requestKey, working)
       }
-      setSyncMessage(working.dirty || working.pendingConfirm || working.pendingCancels.length
+      setMessageForKey(requestKey, working.dirty || working.pendingConfirm || working.pendingCancels.length
         ? 'Modifications conservées sur cet appareil, synchronisation en attente.' : 'Synchronisé avec votre journal.')
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : ''
       if (/409|révision|version plus récente|changé|changed/i.test(message)) {
-        working = { ...cacheRef.current, conflict: true }; commit(working)
-        setSyncMessage('Conflit de révision : votre saisie locale est conservée sur cet appareil.')
-      } else setSyncMessage(navigator.onLine
-        ? 'Serveur inaccessible : vos changements restent enregistrés sur cet appareil.'
-        : 'Hors connexion : vos changements sont enregistrés sur cet appareil.')
-    } finally { syncLock.current = false; setSyncing(false) }
-  }, [commit])
+        try {
+          const latest = await requestPrivateJson<{ journal: PersistedJournal | null }>('/api/private/journal?date=' + encodeURIComponent(date))
+          const resolved = resolveJournalCacheConflict(working, latest.journal)
+          commitForKey(requestKey, resolved)
+          setMessageForKey(requestKey, resolved.pendingConfirm || resolved.pendingCancels.length
+            ? 'Version serveur reprise automatiquement ; les opérations encore compatibles vont être retentées.'
+            : 'Version serveur reprise automatiquement ; sa dernière révision confirmée est conservée.')
+        } catch {
+          setMessageForKey(requestKey, 'Synchronisation en attente : la dernière version serveur n’a pas pu être relue.')
+        }
+      } else setMessageForKey(requestKey, navigator.onLine
+        ? 'Serveur inaccessible : les changements restent en attente sur cet appareil.'
+        : storageErrorRef.current ? 'Stockage local indisponible : la modification n’est pas sauvegardée et sera perdue à la fermeture.'
+          : 'Hors connexion : les changements sont enregistrés sur cet appareil.')
+    } finally {
+      syncLocks.current.delete(requestKey)
+      setSyncing(syncLocks.current.size > 0)
+    }
+  }, [cacheKey, commitForKey, date, setMessageForKey, storageError])
 
   useEffect(() => { cacheRef.current = cache }, [cache])
   useEffect(() => {
     let active = true
     setLoading(true); setInitialized(false); setError('')
     const local = readJournalCache(localStorage, cacheKey) ?? emptyJournalCache()
-    cacheRef.current = local; setCache(local)
+    cacheRef.current = local; cacheRefKey.current = cacheKey; setCache(local)
     async function load() {
       try {
         const { journal } = await requestPrivateJson<{ journal: PersistedJournal | null }>(`/api/private/journal?date=${encodeURIComponent(date)}`)
         if (!active) return
         if (local.dirty && ((journal?.day.id ?? null) !== (local.day?.id ?? null) || (journal?.day.revision ?? 0) !== local.serverRevision)) {
-          const conflict = { ...local, conflict: true }
-          cacheRef.current = conflict; setCache(conflict); setSyncMessage('Conflit de révision : votre saisie locale est conservée sur cet appareil.')
+          const resolved = resolveJournalCacheConflict(local, journal)
+          cacheRef.current = resolved; cacheRefKey.current = cacheKey; setCache(resolved)
+          setSyncMessage('Version serveur reprise automatiquement ; sa dernière révision confirmée est conservée.')
+          if (!persistJournalCacheForKey(localStorage, cacheKey, cacheKey, resolved).persisted) setStorageError(true)
         } else if (local.dirty || local.pendingConfirm || local.pendingCancels.length) {
           const restored = { ...local, ...(journal ? { snapshots: journal.snapshots } : {}) }
-          cacheRef.current = restored; setCache(restored); setSyncMessage('Reprise des opérations locales en attente.')
+          cacheRef.current = restored; cacheRefKey.current = cacheKey; setCache(restored); setSyncMessage('Reprise des opérations locales en attente.')
         } else if (journal) {
           const restored = { ...emptyJournalCache(), day: journal.day, snapshots: journal.snapshots, serverRevision: journal.day.revision,
             sources: local.sources, photoDataUrl: local.photoDataUrl }
-          cacheRef.current = restored; setCache(restored); setSyncMessage('Journal chargé depuis Supabase.')
+          cacheRef.current = restored; cacheRefKey.current = cacheKey; setCache(restored); setSyncMessage('Journal chargé depuis Supabase.')
           void loadFoodSources(journal.day, restored.sources, () => active).then((sources) => {
             if (active) commit({ ...cacheRef.current, sources })
           })
         } else {
           const fresh = { ...emptyJournalCache(), sources: local.sources, photoDataUrl: local.photoDataUrl }
-          cacheRef.current = fresh; setCache(fresh)
+          cacheRef.current = fresh; cacheRefKey.current = cacheKey; setCache(fresh)
           setSyncMessage(navigator.onLine ? 'Aucun repas enregistré pour cette journée.' : 'Aucune copie locale pour cette journée.')
         }
       } catch {
         if (!active) return
-        cacheRef.current = local; setCache(local)
+        cacheRef.current = local; cacheRefKey.current = cacheKey; setCache(local)
         setSyncMessage(local.day || local.snapshots.length ? 'Serveur inaccessible : copie locale chargée.' : 'La journée sera créée localement dès votre première saisie.')
       } finally {
         if (active) { setLoading(false); setInitialized(true) }
@@ -156,14 +194,18 @@ export default function Journal({ userId }: { readonly userId: string }) {
 
   useEffect(() => {
     const onOnline = () => { setOnline(true); void sync() }
-    const onOffline = () => { setOnline(false); setSyncMessage('Hors connexion : les brouillons et opérations sont conservés localement.') }
+    const onOffline = () => { setOnline(false); setSyncMessage(storageErrorRef.current ? 'Hors connexion : le stockage local a échoué, cette modification n’est pas sauvegardée.' : 'Hors connexion : les brouillons et opérations sont conservés localement.') }
     window.addEventListener('online', onOnline); window.addEventListener('offline', onOffline)
     return () => { window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline) }
-  }, [sync])
+  }, [storageError, sync])
 
   useEffect(() => {
     if (!initialized) return
-    if (!writeJournalCache(localStorage, cacheKey, cache)) setSyncMessage('Stockage local saturé : synchronisez avant de continuer.')
+    if (!writeJournalCache(localStorage, cacheKey, cache)) {
+      storageErrorRef.current = true
+      setStorageError(true)
+      setSyncMessage(navigator.onLine ? 'Écriture locale impossible. La synchronisation serveur est en cours.' : 'Écriture locale impossible : cette modification n’est pas sauvegardée hors connexion.')
+    } else { storageErrorRef.current = false; setStorageError(false) }
     if (cache.dirty || cache.pendingConfirm || cache.pendingCancels.length) {
       const timer = window.setTimeout(() => { void sync() }, 700)
       return () => window.clearTimeout(timer)
@@ -209,7 +251,7 @@ export default function Journal({ userId }: { readonly userId: string }) {
   function requestConfirm(mealId: string) {
     commit({ ...cacheRef.current, pendingConfirm: { mealId, snapshotId: crypto.randomUUID(),
       confirmedAt: new Date().toISOString(), engineVersion }, conflict: false })
-    setSyncMessage(online ? 'Confirmation en cours…' : 'Confirmation en attente de connexion ; le brouillon reste conservé.')
+    setSyncMessage(!online && storageErrorRef.current ? 'Confirmation en attente, mais le stockage local a échoué : le brouillon n’est pas sauvegardé hors connexion.' : online ? 'Confirmation en cours…' : 'Confirmation en attente de connexion ; le brouillon reste conservé.')
     if (online) void sync()
   }
 
@@ -219,8 +261,11 @@ export default function Journal({ userId }: { readonly userId: string }) {
     try {
       const result = cancelConfirmedMeal({ days: cacheRef.current.day ? [cacheRef.current.day] : [], snapshots: cacheRef.current.snapshots },
         snapshot.snapshotId, { newSnapshotId: pending.newSnapshotId, confirmedAt: pending.confirmedAt, engineVersion })
-      commit({ ...cacheRef.current, snapshots: result.state.snapshots, pendingCancels: [...cacheRef.current.pendingCancels, pending] })
-      setSyncMessage(online ? 'Annulation en cours…' : 'Annulation en attente de connexion, exclue du total local.')
+      const day = cacheRef.current.day
+      const nextDay = day ? { ...day, revision: day.revision + 1, meals: day.meals.filter((meal) => meal.id !== snapshot.logicalMealId) } : null
+      commit({ ...cacheRef.current, day: nextDay, dirty: nextDay ? true : cacheRef.current.dirty,
+        snapshots: result.state.snapshots, pendingCancels: [...cacheRef.current.pendingCancels, pending] })
+      setSyncMessage(!online && storageErrorRef.current ? 'Annulation en attente, mais le stockage local a échoué : cette action n’est pas sauvegardée hors connexion.' : online ? 'Annulation en cours…' : 'Annulation en attente de connexion, exclue du total local.')
       if (online) void sync()
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Le repas n’a pas pu être annulé.') }
   }
@@ -250,24 +295,11 @@ export default function Journal({ userId }: { readonly userId: string }) {
     if (!file) return
     try {
       commit({ ...cacheRef.current, photoDataUrl: await compressPhoto(file) })
-      setSyncMessage('Photo jointe à la copie locale. Son analyse n’est pas disponible dans ce lot.')
+      setSyncMessage(!navigator.onLine && storageErrorRef.current ? 'La photo est uniquement en mémoire : le stockage local a échoué et elle sera perdue à la fermeture.' : 'Photo jointe à la copie locale. Son analyse n’est pas disponible dans ce lot.')
     } catch { setError('Cette photo n’a pas pu être préparée sur cet appareil.') }
   }
 
-  function reloadServerKeepingLocalCopy() {
-    try {
-      if (!archiveJournalCache(localStorage, cacheKey, cacheRef.current, String(Date.now()))) {
-        throw new Error('Impossible de préserver la copie locale en conflit.')
-      }
-      setLoading(true)
-      void requestPrivateJson<{ journal: PersistedJournal | null }>(`/api/private/journal?date=${encodeURIComponent(date)}`).then(({ journal }) => {
-        const next = journal ? { ...emptyJournalCache(), day: journal.day, snapshots: journal.snapshots,
-          serverRevision: journal.day.revision, sources: cacheRef.current.sources } : emptyJournalCache()
-        commit(next); setSyncMessage('Version serveur chargée. La copie locale en conflit reste archivée sur cet appareil.')
-      }).catch(() => setError('La version serveur ne peut pas être rechargée pour le moment.'))
-        .finally(() => setLoading(false))
-    } catch { setError('La copie locale de conflit n’a pas pu être conservée.') }
-  }
+
   return <div className="journal-page">
     <header className="journal-heading">
       <div><small>JOURNAL ALIMENTAIRE</small><h1>Votre journée, <em>en détail.</em></h1><p>Saisie manuelle et calcul déterministe à partir des fiches USDA.</p></div>
@@ -275,7 +307,7 @@ export default function Journal({ userId }: { readonly userId: string }) {
     </header>
     <div className={online ? 'journal-sync' : 'journal-sync offline'} role="status" aria-live="polite"><span aria-hidden="true">{online ? '●' : '◌'}</span>{syncMessage}{syncing && <span className="sync-spinner" aria-label="Synchronisation en cours"/>}</div>
     {error && <p role="alert" className="journal-error">{error}</p>}
-    {cache.conflict && <div className="journal-conflict" role="alert"><b>Votre copie locale est préservée.</b><span>Une version plus récente existe sur le serveur. Aucun changement local n’a été remplacé.</span><button type="button" onClick={reloadServerKeepingLocalCopy}>Charger la version serveur en gardant ma copie</button></div>}
+    {storageError && <p role="alert" className="journal-error">{online ? 'Le stockage local a échoué. Vérifiez la synchronisation avant de fermer cette page.' : 'Le brouillon n’a pas pu être enregistré sur cet appareil et sera perdu à la fermeture.'}</p>}
     {cache.photoDataUrl && <div className="journal-photo"><img src={cache.photoDataUrl} alt="Photo jointe localement au journal"/><div><b>Photo jointe sur cet appareil</b><small>Elle n’est pas envoyée ni analysée dans ce lot.</small></div><button type="button" onClick={() => commit({ ...cacheRef.current, photoDataUrl: null })}>Retirer</button></div>}
     {loading ? <div className="journal-loading" role="status">Chargement de la journée…</div> : <>
       <section className="journal-totals" aria-label="Totaux nutritionnels de la journée">
@@ -301,7 +333,7 @@ export default function Journal({ userId }: { readonly userId: string }) {
           {addingFoodTo === meal.id ? <FoodPicker onCancel={() => setAddingFoodTo(null)} onSelect={(food, quantity) => addSelectedFood(meal.id, food, quantity)}/> :
             <button type="button" className="journal-add-food" onClick={() => setAddingFoodTo(meal.id)}>+ Ajouter un aliment</button>}
           {cache.pendingConfirm?.mealId === meal.id ? <div className="journal-pending-confirm" role="status">Confirmation en attente de synchronisation. Le brouillon reste modifiable.</div> :
-            <button type="button" className="journal-confirm" disabled={meal.items.length === 0 || syncing || cache.conflict} onClick={() => requestConfirm(meal.id)}>Confirmer ce repas</button>}
+            <button type="button" className="journal-confirm" disabled={meal.items.length === 0 || syncing} onClick={() => requestConfirm(meal.id)}>Confirmer ce repas</button>}
         </article>)}
         {addingMeal && <form className="journal-new-meal" onSubmit={addMeal}>
           <h3>Nouveau repas</h3><label>Catégorie<select value={newMealKind} onChange={(event) => setNewMealKind(event.target.value as MealKind)}>{Object.entries(mealLabels).map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>
@@ -311,8 +343,8 @@ export default function Journal({ userId }: { readonly userId: string }) {
         </form>}
         {activeSnapshots.map((snapshot) => <article className="journal-meal journal-confirmed" key={snapshot.snapshotId}>
           <div className="journal-meal-header"><div className="journal-meal-kind"><span className="meal-dot confirmed-dot"/><b>{mealLabels[snapshot.mealKind]} · confirmé</b></div><span className="confirmed-time">{instantToLabel(snapshot.occurredAt)}</span>
-            <button type="button" className="journal-link" disabled={cache.dirty || syncing || cache.conflict} onClick={() => startCorrection(snapshot)}>Corriger</button>
-            <button type="button" className="journal-link danger" disabled={syncing || cache.conflict} onClick={() => requestCancel(snapshot)}>Supprimer</button></div>
+            <button type="button" className="journal-link" disabled={cache.dirty || syncing} onClick={() => startCorrection(snapshot)}>Corriger</button>
+            <button type="button" className="journal-link danger" disabled={syncing} onClick={() => requestCancel(snapshot)}>Supprimer</button></div>
           <div className="journal-confirmed-items">{snapshot.items.map((item) => <span key={item.id}>{item.kind === 'food' ? item.foodSnapshot.description : item.recipeSnapshot.recipe.name}{item.kind === 'food' ? ` · ${item.enteredQuantity.amount} ${item.enteredQuantity.unit}` : ''}</span>)}</div>
           <div className="journal-meal-totals"><b>Apports confirmés</b>{sections.map(({code,label,unit})=><span key={code}>{label} <strong>{formatTotal(snapshot.status === 'confirmed' ? snapshot.totals[code] : undefined, unit)}</strong></span>)}</div>
           {cache.pendingCancels.some((pending) => pending.snapshotId === snapshot.snapshotId) && <div className="journal-pending-confirm">Annulation en attente de synchronisation.</div>}
@@ -434,20 +466,7 @@ function instantToLabel(value: string | null): string {
 function replaceSnapshot(snapshots: readonly ConfirmedMealSnapshot[], snapshot: ConfirmedMealSnapshot): readonly ConfirmedMealSnapshot[] {
   return [...snapshots.filter((item) => item.snapshotId !== snapshot.snapshotId), snapshot]
 }
-async function loadFoodSources(day: JournalDayDraft, cached: Readonly<Record<string, FoodNutritionSnapshot>>, isActive: () => boolean): Promise<Readonly<Record<string, FoodNutritionSnapshot>>> {
-  const ids = [...new Set(day.meals.flatMap((meal) => meal.items.flatMap((item) => item.kind === 'food' && !cached[item.foodId] && !item.pinnedFoodSnapshot ? [item.foodId] : [])))]
-  const entries = await Promise.all(ids.map(async (foodId) => {
-    const match = /^usda:(\d+)$/.exec(foodId)
-    if (!match) return null
-    try {
-      const response = await fetch(`/api/foods/${match[1]}`, { cache: 'no-store' })
-      if (!response.ok) return null
-      const detail = await response.json() as FoodDetail
-      return [foodId, usdaDetailToFoodSnapshot(detail)] as const
-    } catch { return null }
-  }))
-  return isActive() ? { ...cached, ...Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)) } : cached
-}
+
 async function compressPhoto(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) throw new TypeError('Image required')
   const bitmap = await createImageBitmap(file)

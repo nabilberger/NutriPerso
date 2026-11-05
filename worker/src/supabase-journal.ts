@@ -83,12 +83,16 @@ export async function cancelJournalMeal(
   snapshotId: string,
   input: { readonly newSnapshotId: string; readonly confirmedAt: string; readonly engineVersion: string },
   fetcher: typeof fetch = fetch,
-): Promise<ConfirmedMealSnapshot> {
+): Promise<{ readonly day: JournalDayDraft; readonly snapshot: ConfirmedMealSnapshot }> {
   assertUserId(scope.userId)
   const snapshots = await readSnapshotHistory(env, scope, fetcher)
   const retry = snapshots.find((snapshot) => snapshot.snapshotId === input.newSnapshotId)
   if (retry) {
-    if (retry.status === 'void' && retry.supersedesSnapshotId === snapshotId) return retry
+    if (retry.status === 'void' && retry.supersedesSnapshotId === snapshotId) {
+      const persisted = await getJournalPersistence(env, scope, retry.dayId, fetcher)
+      if (!persisted) throw new JournalPersistenceError('INVALID_JOURNAL', 'Journée du repas introuvable.')
+      return { day: persisted.day, snapshot: retry }
+    }
     throw new JournalPersistenceError('REVISION_CONFLICT', 'Cet identifiant d’opération est déjà utilisé par un autre snapshot.')
   }
   const target = snapshots.find((snapshot) => snapshot.snapshotId === snapshotId)
@@ -99,8 +103,9 @@ export async function cancelJournalMeal(
   const result = cancelConfirmedMeal(state, snapshotId, input)
   const day = state.days.find((candidate) => candidate.id === result.snapshot.dayId)
   if (!day) throw new JournalPersistenceError('INVALID_JOURNAL', 'Journée du repas introuvable.')
-  await appendSnapshot(env, scope, day, day, result.snapshot, fetcher)
-  return result.snapshot
+  const nextDay: JournalDayDraft = { ...day, revision: day.revision + 1, meals: day.meals.filter((meal) => meal.id !== target.logicalMealId) }
+  await appendSnapshot(env, scope, day, nextDay, result.snapshot, fetcher)
+  return { day: nextDay, snapshot: result.snapshot }
 }
 
 /** Loads stored drafts and snapshots verbatim; no current catalogue data is consulted. */

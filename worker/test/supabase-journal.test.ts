@@ -54,7 +54,7 @@ function mockApi() {
       const row = { snapshot_id: body.p_snapshot.snapshotId, user_id: body.p_user_id, logical_meal_id: body.p_snapshot.logicalMealId,
         predecessor_snapshot_id: predecessor, snapshot: body.p_snapshot }
       snapshots.push(row)
-      if (body.p_snapshot.status !== 'void') days.set(body.p_day_id, { ...day, revision: body.p_next_draft.revision, draft: body.p_next_draft })
+      days.set(body.p_day_id, { ...day, revision: body.p_next_draft.revision, draft: body.p_next_draft })
       return Response.json([{ ...row, snapshot: sortKeys(row.snapshot) }])
     }
     if (url.pathname.endsWith('/journal_days')) {
@@ -165,17 +165,23 @@ test('stale day revisions conflict and active statistics exclude void successors
   const confirmed = confirmMeal(state, dayId, 'meal-1', { foods: new Map([[source.foodId, source]]) }, {
     snapshotId: 'meal-snapshot-1', confirmedAt: '2026-11-04T12:00:00.000Z', engineVersion: 'nutrition-engine-v1',
   })
-  await confirmJournalMeal(env, scope, dayId, 'meal-1', { foods: new Map([[source.foodId, source]]) }, {
+  const persistedConfirmation = await confirmJournalMeal(env, scope, dayId, 'meal-1', { foods: new Map([[source.foodId, source]]) }, {
     snapshotId: 'meal-snapshot-1', confirmedAt: '2026-11-04T12:00:00.000Z', engineVersion: 'nutrition-engine-v1',
   }, mock.fetcher)
   await assert.rejects(confirmJournalMeal(env, scope, dayId, 'meal-1', { foods: new Map([[source.foodId, source]]) }, {
     snapshotId: 'another-snapshot', confirmedAt: '2026-11-04T13:00:00.000Z', engineVersion: 'nutrition-engine-v1',
   }, mock.fetcher), (error: unknown) => error instanceof JournalPersistenceError && error.code === 'REVISION_CONFLICT')
+  const correction = createMealCorrectionDraft(confirmed.state, 'meal-snapshot-1')
+  await saveJournalDayDraft(env, scope, correction.days[0]!, persistedConfirmation.day.revision, mock.fetcher)
 
   const cancelled = await cancelJournalMeal(env, scope, 'meal-snapshot-1', {
     newSnapshotId: 'meal-snapshot-void', confirmedAt: '2026-11-04T14:00:00.000Z', engineVersion: 'nutrition-engine-v1',
   }, mock.fetcher)
-  assert.equal(cancelled.status, 'void')
+  assert.equal(cancelled.snapshot.status, 'void')
+  assert.equal(cancelled.day.revision, correction.days[0]!.revision + 1)
+  assert.equal(cancelled.day.meals.length, 0)
+  await assert.rejects(saveJournalDayDraft(env, scope, correction.days[0]!, correction.days[0]!.revision - 1, mock.fetcher),
+    (error: unknown) => error instanceof JournalPersistenceError && error.code === 'REVISION_CONFLICT')
   assert.deepEqual(await cancelJournalMeal(env, scope, 'meal-snapshot-1', {
     newSnapshotId: 'meal-snapshot-void', confirmedAt: '2026-11-04T14:00:00.000Z', engineVersion: 'nutrition-engine-v1',
   }, mock.fetcher), cancelled)

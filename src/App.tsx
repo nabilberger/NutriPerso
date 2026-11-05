@@ -6,6 +6,7 @@ import { requestPrivateJson } from './auth/client'
 import { AuthGate, useAuth } from './auth/AuthProvider'
 import { nextAccountMenuIndex } from './account-menu-navigation'
 import Journal from './Journal'
+import { formatDashboardEnergy } from './dashboard-summary.ts'
 import { calculateJournalDay, selectActiveMealSnapshots, type ConfirmedMealSnapshot, type JournalDayDraft, type JournalState } from './domain/nutrition/journal.ts'
 
 const sections = [
@@ -134,9 +135,7 @@ function Dashboard({ navigate, userId }: { navigate: (section: Section) => void;
     : null
   const totals = state && journal?.day ? calculateJournalDay(state, journal.day.id) : {}
   const energy = totals.energy
-  const energyLabel = energy?.status === 'complete' ? energy.value
-    : energy?.status === 'partial' ? `${energy.knownSubtotal}*`
-      : snapshots.length > 0 ? 'Inconnu' : '—'
+  const energyLabel = formatDashboardEnergy(energy, snapshots.length > 0)
   const draftCount = journal?.day?.meals.length ?? 0
   const journalStatus = journalState === 'loading' ? 'Chargement du journal…'
     : journalState === 'error' ? 'Résumé du journal indisponible'

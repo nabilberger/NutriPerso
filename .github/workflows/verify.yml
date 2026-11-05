@@ -1,9 +1,9 @@
 name: NutriPerso checks
 on:
   push:
-    branches: [main, "design/**"]
+    branches: [main, "design/**", "feat/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "design/**"]
 jobs:
   verify:
     runs-on: ubuntu-latest

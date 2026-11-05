@@ -24,7 +24,9 @@ import { makeFraction } from '../../src/domain/nutrition/decimal.ts'
 import { createConfirmedRecipeSnapshot } from '../../src/domain/nutrition/recipe-snapshot.ts'
 import { addRecipeIngredient, calculateFoodSnapshot, calculateRecipe, createRecipe, setRecipeFinalWeight, setRecipeServings, type FoodNutritionSnapshot } from '../../src/domain/nutrition/recipes.ts'
 import { usdaDetailToFoodSnapshot } from '../../src/domain/nutrition/usda-food-snapshot.ts'
-import { archiveJournalCache, emptyJournalCache, journalCacheKey, readJournalCache, writeJournalCache } from '../../src/journal-cache.ts'
+import { archiveJournalCache, emptyJournalCache, journalCacheKey, persistJournalCacheForKey, readJournalCache, resolveJournalCacheConflict, writeJournalCache } from '../../src/journal-cache.ts'
+import { loadFoodSources } from '../../src/journal-sources.ts'
+import { formatDashboardEnergy } from '../../src/dashboard-summary.ts'
 import type { NutrientContribution, NutrientDatum } from '../../src/domain/nutrition/types.ts'
 
 function food(id: string, protein = '10'): FoodNutritionSnapshot {
@@ -259,4 +261,94 @@ test('meal category and time edits are immutable and keep the other draft fields
   assert.equal(changed.days[0]?.meals[0]?.label, 'Souper')
   assert.equal(changed.days[0]?.meals[0]?.occurredAt, '2026-11-04T19:30:00.000Z')
   assert.equal(changed.days[0]?.meals[0]?.items.length, 1)
+})
+
+test('automatic offline conflict resolution keeps the latest server-confirmed session', () => {
+  const localDay = withFood(start('meal-session-a'), 'meal-session-a').days[0]!
+  const serverDay = createMeal(createJournalDay(createJournalState(), {
+    id: 'day', localDate: '2026-11-04', timeZone: 'UTC',
+  }), 'day', { id: 'meal-session-b', kind: 'dinner' }).days[0]!
+  const local = { ...emptyJournalCache(), day: localDay, serverRevision: 1, dirty: true,
+    sources: { '1': food('1') } }
+  const resolved = resolveJournalCacheConflict(local, { day: serverDay, snapshots: [] })
+  assert.equal(resolved.day?.meals[0]?.id, 'meal-session-b')
+  assert.equal(resolved.dirty, false)
+  assert.equal(resolved.conflict, false)
+  assert.equal(resolved.serverRevision, serverDay.revision)
+  assert.deepEqual(resolved.sources, local.sources)
+})
+
+test('a server-confirmed void snapshot defeats an older local meal draft', () => {
+  const confirmed = confirm(withFood(start('meal-delete'), 'meal-delete'), 'meal-delete')
+  const voided = cancelConfirmedMeal(confirmed.state, 'snapshot-1', {
+    newSnapshotId: 'snapshot-void-priority', confirmedAt: '2026-11-04T13:00:00Z', engineVersion: 'test-engine-1',
+  })
+  const local = { ...emptyJournalCache(), day: withFood(start('meal-delete'), 'meal-delete').days[0]!, dirty: true }
+  const resolved = resolveJournalCacheConflict(local, { day: voided.state.days[0]!, snapshots: voided.state.snapshots })
+  assert.equal(resolved.day?.meals.length, 0)
+  assert.equal(selectActiveMealSnapshots(resolved.snapshots).length, 0)
+  assert.equal(resolved.snapshots.at(-1)?.status, 'void')
+})
+
+test('a compatible pending confirmation survives auto-reconciliation while stale local edits do not', () => {
+  const day = withFood(start('meal-pending'), 'meal-pending').days[0]!
+  const pending = { mealId: 'meal-pending', snapshotId: 'snapshot-op', confirmedAt: '2026-11-04T12:00:00Z', engineVersion: 'v1' }
+  const local = { ...emptyJournalCache(), day, dirty: true, serverRevision: day.revision - 1, pendingConfirm: pending }
+  const serverDay = { ...day, revision: day.revision + 2 }
+  assert.deepEqual(resolveJournalCacheConflict(local, { day: serverDay, snapshots: [] }).pendingConfirm, pending)
+  const changedServerDay = { ...serverDay, meals: serverDay.meals.map((meal) => ({ ...meal, label: 'updated elsewhere' })) }
+  assert.equal(resolveJournalCacheConflict(local, { day: changedServerDay, snapshots: [] }).pendingConfirm, null)
+})
+
+test('late day-A sync results persist under A and cannot update day-B view', () => {
+  const records = new Map<string, string>()
+  const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value) } }
+  const keyA = journalCacheKey('user', '2026-11-04')
+  const keyB = journalCacheKey('user', '2026-11-05')
+  const cacheA = { ...emptyJournalCache(), day: createJournalDay(createJournalState(), { id: 'day-a', localDate: '2026-11-04', timeZone: 'UTC' }).days[0]! }
+  const cacheB = { ...emptyJournalCache(), day: createJournalDay(createJournalState(), { id: 'day-b', localDate: '2026-11-05', timeZone: 'UTC' }).days[0]! }
+  assert.equal(writeJournalCache(storage, keyB, cacheB), true)
+  const result = persistJournalCacheForKey(storage, keyA, keyB, cacheA)
+  assert.equal(result.persisted, true)
+  assert.equal(result.updateActiveView, false)
+  assert.equal(readJournalCache(storage, keyA)?.day?.id, 'day-a')
+  assert.equal(readJournalCache(storage, keyB)?.day?.id, 'day-b')
+})
+
+test('quota failures are visible as unsaved and cannot restore the unpersisted edit after reload', () => {
+  const key = journalCacheKey('user', '2026-11-05')
+  const oldCache = { ...emptyJournalCache(), serverRevision: 1, dirty: false }
+  const stored = new Map<string, string>([[key, JSON.stringify(oldCache)]])
+  const storage = { getItem: (entry: string) => stored.get(entry) ?? null, setItem: (_entry: string, _value: string) => { throw new DOMException('quota exceeded', 'QuotaExceededError') } }
+  const attempted = { ...emptyJournalCache(), serverRevision: 2, dirty: true }
+  assert.equal(writeJournalCache(storage, key, attempted), false)
+  const afterReload = readJournalCache(storage, key)
+  assert.deepEqual(afterReload, oldCache)
+  assert.notDeepEqual(afterReload, attempted)
+})
+
+test('late USDA food-source loading is discarded after switching dates', async () => {
+  const day = addFoodJournalItem(start('meal-load'), 'day', 'meal-load', {
+    id: 'usda-item', foodId: 'usda:2706091',
+    quantity: { kind: 'physical', amount: '100', unit: 'g', weightNature: 'edible' }, sortOrder: 0,
+  }).days[0]!
+  let finish!: (response: Response) => void
+  const pending = new Promise<Response>((resolve) => { finish = resolve })
+  let active = true
+  const cached = { keep: food('keep') }
+  const loading = loadFoodSources(day, cached, () => active, async () => pending)
+  active = false
+  finish(Response.json({ fdcId: 2706091, description: 'Chicken, ground', dataType: 'Survey (FNDDS)', foodCategory: 'Poultry', brandOwner: null, nutrients: [] }))
+  assert.deepEqual(await loading, cached)
+})
+
+test('dashboard energy rounds exact kcal to whole units and marks partial totals', () => {
+  assert.equal(formatDashboardEnergy({ status: 'complete', code: 'energy', value: '251.250000', unit: 'kcal',
+    exactValue: { numerator: '1005', denominator: '4' } }, true), '251')
+  assert.equal(formatDashboardEnergy({ status: 'complete', code: 'energy', value: '251.500000', unit: 'kcal',
+    exactValue: { numerator: '503', denominator: '2' } }, true), '252')
+  assert.equal(formatDashboardEnergy({ status: 'partial', code: 'energy', knownSubtotal: '251.500000', unit: 'kcal',
+    missing: [], exactKnownSubtotal: { numerator: '503', denominator: '2' } }, true), '252*')
+  assert.equal(formatDashboardEnergy(undefined, false), '—')
+  assert.equal(formatDashboardEnergy({ status: 'unknown', code: 'energy', unit: 'kcal', missing: [] }, true), 'Inconnu')
 })

@@ -218,10 +218,10 @@ app.post('/api/private/journal/snapshots/:snapshotId/cancel', async (c) => {
     return c.json({ error: { code: 'INVALID_JOURNAL', message: 'Les informations d’annulation sont invalides.' } }, 400)
   }
   try {
-    const snapshot = await cancelJournalMeal(c.env, c.get('userScope'), c.req.param('snapshotId'), {
+    const result = await cancelJournalMeal(c.env, c.get('userScope'), c.req.param('snapshotId'), {
       newSnapshotId: body.newSnapshotId, confirmedAt: body.confirmedAt, engineVersion: body.engineVersion,
     }, fetcher)
-    return c.json({ snapshot })
+    return c.json(result)
   } catch (error) { return respondPersistenceError(c, error) }
 })
 
