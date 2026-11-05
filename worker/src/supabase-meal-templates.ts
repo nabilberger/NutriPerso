@@ -40,7 +40,12 @@ export async function saveMealTemplate(env: SupabaseCatalogEnv, scope: MealTempl
   if (!response.ok) throw new MealTemplateError(response.status, 'Le modèle n’a pas pu être enregistré.')
   const rows = await response.json() as Row[]
   if (!Array.isArray(rows) || rows.length !== 1) throw new MealTemplateError(409, 'Révision du modèle incompatible.')
-  return fromRow(rows[0]!, scope.userId)
+  const saved = fromRow(rows[0]!, scope.userId)
+  const revisionUrl = new URL('/rest/v1/meal_template_revisions', env.SUPABASE_URL!)
+  const revisionResponse = await fetcher(revisionUrl, { method: 'POST', headers: headers(env, 'return=minimal'),
+    body: JSON.stringify({ template_id: saved.id, user_id: scope.userId, revision: saved.revision, template: saved.meal }) })
+  if (!revisionResponse.ok) throw new MealTemplateError(502, 'Le modèle a été enregistré, mais son historique n’a pas pu être conservé.')
+  return saved
 }
 export async function deleteMealTemplate(env: SupabaseCatalogEnv, scope: MealTemplateScope, id: string, fetcher: typeof fetch = fetch): Promise<void> {
   if (!isUuid(id)) throw new MealTemplateError(400, 'Identifiant de modèle invalide.')
