@@ -175,10 +175,10 @@ app.get('/api/private/meal-templates', async (c) => {
 app.put('/api/private/meal-templates/:templateId', async (c) => {
   const body = await readActionBody(c, ['template', 'expectedRevision'])
   if (body instanceof Response) return body
+  if (!isRecord(body.template) || body.template.id !== c.req.param('templateId')) return c.json({ error: { code: 'INVALID_TEMPLATE', message: 'L’identifiant du modèle ne correspond pas à la route.' } }, 400)
   try {
     const template = await saveMealTemplate(c.env, c.get('userScope'), body.template,
       body.expectedRevision === null || Number.isSafeInteger(body.expectedRevision) ? body.expectedRevision as number | null : Number.NaN, fetcher)
-    if (template.id !== c.req.param('templateId')) return c.json({ error: { code: 'INVALID_TEMPLATE', message: 'L’identifiant du modèle ne correspond pas à la route.' } }, 400)
     return c.json({ template })
   } catch (error) { return respondMealTemplateError(c, error) }
 })
