@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
-  addFoodJournalItem, addRecipeJournalItem, calculateJournalDayPreview, calculateJournalMeal, cancelConfirmedMeal,
+  addFoodJournalItem, calculateJournalDayPreview, calculateJournalMeal, cancelConfirmedMeal,
   createJournalDay, createJournalState, createMeal, createMealCorrectionDraft, removeJournalItem,
   removeMealDraft, selectActiveMealSnapshots, setFoodJournalItemQuantity, updateMealDetails,
   type ConfirmedMealSnapshot, type JournalDayDraft, type JournalState, type MealKind,
@@ -9,7 +9,7 @@ import type { FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
 import type { FoodQuantityInput } from './domain/nutrition/portions.ts'
 import type { NutrientTotal } from './domain/nutrition/types.ts'
 import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
-import type { MealReuseDTO } from './meal-reuse'
+import { buildMealReuseDraft, selectCurrentRecipeSnapshot, type MealReuseDTO } from './meal-reuse'
 import { decimalToFraction, fractionToDecimal, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { requestPrivateJson } from './auth/client'
@@ -308,23 +308,19 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
           state = createJournalDay(state, { id: crypto.randomUUID(), localDate: today, timeZone })
           day = state.days[0]!
         }
-        const mealId = crypto.randomUUID()
-        state = createMeal(state, day.id, { id: mealId, kind: reuseRequest.source.mealKind,
-          label: reuseRequest.source.label, occurredAt: new Date().toISOString() })
-        for (const item of reuseRequest.source.items) {
-          const id = crypto.randomUUID()
-          if (item.kind === 'food') {
-            state = addFoodJournalItem(state, day.id, mealId,
-              { id, foodId: item.foodId, quantity: item.quantity, sortOrder: item.sortOrder })
-          } else {
-            const result = await requestPrivateJson<{ snapshots: ConfirmedRecipeSnapshot[] }>(`/api/private/recipes/${encodeURIComponent(item.recipeId)}`)
-            const latest = result.snapshots.filter((snapshot) => snapshot.recipe.id === item.recipeId)
-              .sort((a, b) => b.recipe.revision - a.recipe.revision || b.confirmedAt.localeCompare(a.confirmedAt))[0]
-            if (!latest) throw new Error('Aucun snapshot confirmé actuel de cette recette n’est disponible.')
-            state = addRecipeJournalItem(state, day.id, mealId,
-              { id, recipeSnapshot: latest, quantity: item.quantity, sortOrder: item.sortOrder })
-          }
-        }
+        const recipeIds = [...new Set(reuseRequest.source.items.flatMap((item) => item.kind === 'recipe' ? [item.recipeId] : []))]
+        const recipeEntries = await Promise.all(recipeIds.map(async (recipeId) => {
+          const result = await requestPrivateJson<{ snapshots: ConfirmedRecipeSnapshot[] }>(`/api/private/recipes/${encodeURIComponent(recipeId)}`)
+          const latest = selectCurrentRecipeSnapshot(result.snapshots, recipeId)
+          if (!latest) throw new Error('Aucun snapshot confirmé actuel de cette recette n’est disponible.')
+          return [recipeId, latest] as const
+        }))
+        const recipes = Object.fromEntries(recipeEntries)
+        const state = buildMealReuseDraft(
+          { days: day ? [day] : [], snapshots: cacheNow.snapshots },
+          { id: day?.id ?? crypto.randomUUID(), localDate: today, timeZone },
+          reuseRequest.source, recipes, () => crypto.randomUUID(),
+        )
         if (cancelled) return
         const nextDay = state.days.find((entry) => entry.id === day!.id)!
         const currentFoods = { ...cacheNow.sources }
