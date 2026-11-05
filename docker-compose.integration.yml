@@ -23,10 +23,17 @@ services:
         condition: service_healthy
     environment:
       PGPASSWORD: local-only-nutriperso
-    entrypoint: ["bash", "-ec"]
-    command: >-
-      until pg_isready -h db -U postgres -d nutriperso_test; do sleep 1; done;
-      psql -h db -U postgres -d nutriperso_test -v ON_ERROR_STOP=1
-      -f /tests/meal-templates.integration.sql
+    entrypoint: ["psql"]
+    command:
+      - -h
+      - db
+      - -U
+      - postgres
+      - -d
+      - nutriperso_test
+      - -v
+      - ON_ERROR_STOP=1
+      - -f
+      - /tests/meal-templates.integration.sql
     volumes:
       - ./supabase/tests/local/meal-templates.integration.sql:/tests/meal-templates.integration.sql:ro
