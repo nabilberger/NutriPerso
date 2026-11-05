@@ -12,6 +12,8 @@ import { usdaDetailToFoodSnapshot } from '../../src/domain/nutrition/usda-food-s
 import type { ConfirmedFoodJournalItem, JournalDayDraft } from '../../src/domain/nutrition/journal.ts'
 import { getProfile, saveProfile, ProfileError } from './supabase-profile.ts'
 import {listMeasurements, addMeasurement, deleteMeasurement} from './supabase-measurements.ts'
+import { getActiveJournalSnapshots } from './supabase-journal.ts'
+import { deleteMealTemplate, listMealTemplates, MealTemplateError, saveMealTemplate } from './supabase-meal-templates.ts'
 
 type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv
 type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
@@ -146,6 +148,43 @@ app.put('/api/private/recipes/:recipeId/draft', async (c) => {
     const saved = await saveRecipeDraft(c.env, c.get('userScope'), parsed.draft as unknown as RecipeDraft, parsed.expectedRevision, fetcher)
     return c.json({ draft: saved })
   } catch (error) { return respondPersistenceError(c, error) }
+})
+
+app.get('/api/private/journal/history', async (c) => {
+  try {
+    const limit = Math.min(100, Math.max(1, Number.parseInt(c.req.query('limit') ?? '20', 10) || 20))
+    const offset = Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0)
+    const query = (c.req.query('q') ?? '').trim().toLocaleLowerCase()
+    const from = c.req.query('from') ?? ''
+    const to = c.req.query('to') ?? ''
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))) {
+      return c.json({ error: { code: 'INVALID_FILTER', message: 'Les dates de filtre sont invalides.' } }, 400)
+    }
+    const active = [...await getActiveJournalSnapshots(c.env, c.get('userScope'), fetcher)]
+      .filter((snapshot) => snapshot.status === 'confirmed' && (!from || snapshot.localDate >= from) && (!to || snapshot.localDate <= to))
+      .filter((snapshot) => !query || [snapshot.label ?? '', ...snapshot.items.map((item) => item.kind === 'food' ? item.foodSnapshot.description : item.recipeSnapshot.recipe.name)].join(' ').toLocaleLowerCase().includes(query))
+      .sort((a, b) => b.localDate.localeCompare(a.localDate) || b.confirmedAt.localeCompare(a.confirmedAt))
+    return c.json({ meals: active.slice(offset, offset + limit), total: active.length, limit, offset })
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
+app.get('/api/private/meal-templates', async (c) => {
+  try { return c.json({ templates: await listMealTemplates(c.env, c.get('userScope'), fetcher) }) }
+  catch (error) { return respondMealTemplateError(c, error) }
+})
+app.put('/api/private/meal-templates/:templateId', async (c) => {
+  const body = await readActionBody(c, ['template', 'expectedRevision'])
+  if (body instanceof Response) return body
+  try {
+    const template = await saveMealTemplate(c.env, c.get('userScope'), body.template,
+      body.expectedRevision === null || Number.isSafeInteger(body.expectedRevision) ? body.expectedRevision as number | null : Number.NaN, fetcher)
+    if (template.id !== c.req.param('templateId')) return c.json({ error: { code: 'INVALID_TEMPLATE', message: 'L’identifiant du modèle ne correspond pas à la route.' } }, 400)
+    return c.json({ template })
+  } catch (error) { return respondMealTemplateError(c, error) }
+})
+app.delete('/api/private/meal-templates/:templateId', async (c) => {
+  try { await deleteMealTemplate(c.env, c.get('userScope'), c.req.param('templateId'), fetcher); return c.body(null, 204) }
+  catch (error) { return respondMealTemplateError(c, error) }
 })
 
 app.get('/api/private/journal', async (c) => {
@@ -319,6 +358,11 @@ function containsUserId(value: unknown): boolean {
 function respondProfileError(c: Context<AppEnv>, error: unknown) {
   if (error instanceof ProfileError) return c.json({ error: { code: 'PROFILE_ERROR', message: error.message } }, error.status as ContentfulStatusCode)
   return c.json({ error: { code: 'PROFILE_ERROR', message: 'Le profil est momentanément indisponible.' } }, 502)
+}
+
+function respondMealTemplateError(c: Context<AppEnv>, error: unknown) {
+  if (error instanceof MealTemplateError) return c.json({ error: { code: error.status === 409 ? 'REVISION_CONFLICT' : 'INVALID_TEMPLATE', message: error.message } }, error.status as ContentfulStatusCode)
+  return respondPersistenceError(c, error)
 }
 
 function respondPersistenceError(c: Context<AppEnv>, error: unknown) {
