@@ -10,6 +10,7 @@ import type { FoodQuantityInput } from './domain/nutrition/portions.ts'
 import type { NutrientTotal } from './domain/nutrition/types.ts'
 import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
 import { buildMealReuseDraft, selectCurrentRecipeSnapshot, type MealReuseDTO } from './meal-reuse'
+import { createUuidV4 } from './secure-uuid.ts'
 import { decimalToFraction, fractionToDecimal, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { requestPrivateJson } from './auth/client'
@@ -240,10 +241,10 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
       let current: JournalState = { days: cacheRef.current.day ? [cacheRef.current.day] : [], snapshots: cacheRef.current.snapshots }
       let day = cacheRef.current.day
       if (!day) {
-        current = createJournalDay(createJournalState(), { id: crypto.randomUUID(), localDate: date, timeZone })
+        current = createJournalDay(createJournalState(), { id: createUuidV4(), localDate: date, timeZone })
         day = current.days[0]!
       }
-      current = createMeal(current, day.id, { id: crypto.randomUUID(), kind: newMealKind, label: newMealLabel || null,
+      current = createMeal(current, day.id, { id: createUuidV4(), kind: newMealKind, label: newMealLabel || null,
         occurredAt: inputToInstant(newMealTime), sortOrder: day.meals.length })
       commit({ ...cacheRef.current, day: current.days[0]!, dirty: true, conflict: false })
       setAddingMeal(false); setNewMealLabel(''); setError('')
@@ -251,14 +252,14 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
   }
 
   function requestConfirm(mealId: string) {
-    commit({ ...cacheRef.current, pendingConfirm: { mealId, snapshotId: crypto.randomUUID(),
+    commit({ ...cacheRef.current, pendingConfirm: { mealId, snapshotId: createUuidV4(),
       confirmedAt: new Date().toISOString(), engineVersion }, conflict: false })
     setSyncMessage(!online && storageErrorRef.current ? 'Confirmation en attente, mais le stockage local a échoué : le brouillon n’est pas sauvegardé hors connexion.' : online ? 'Confirmation en cours…' : 'Confirmation en attente de connexion ; le brouillon reste conservé.')
     if (online) void sync()
   }
 
   function requestCancel(snapshot: ConfirmedMealSnapshot) {
-    const pending: PendingJournalCancel = { snapshotId: snapshot.snapshotId, newSnapshotId: crypto.randomUUID(),
+    const pending: PendingJournalCancel = { snapshotId: snapshot.snapshotId, newSnapshotId: createUuidV4(),
       confirmedAt: new Date().toISOString(), engineVersion }
     try {
       const result = cancelConfirmedMeal({ days: cacheRef.current.day ? [cacheRef.current.day] : [], snapshots: cacheRef.current.snapshots },
@@ -284,7 +285,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
     try {
       const current = { days: cacheRef.current.day ? [cacheRef.current.day] : [], snapshots: cacheRef.current.snapshots }
       const next = addFoodJournalItem(current, cacheRef.current.day!.id, mealId, {
-        id: crypto.randomUUID(), foodId: food.foodId, quantity,
+        id: createUuidV4(), foodId: food.foodId, quantity,
         sortOrder: cacheRef.current.day!.meals.find((meal) => meal.id === mealId)?.items.length ?? 0,
       })
       commit({ ...cacheRef.current, day: next.days[0]!, sources: { ...cacheRef.current.sources, [food.foodId]: food },
@@ -305,7 +306,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
         let day = cacheNow.day?.localDate === today ? cacheNow.day : null
         let state: JournalState = { days: day ? [day] : [], snapshots: cacheNow.snapshots }
         if (!day) {
-          state = createJournalDay(state, { id: crypto.randomUUID(), localDate: today, timeZone })
+          state = createJournalDay(state, { id: createUuidV4(), localDate: today, timeZone })
           day = state.days[0]!
         }
         const recipeIds = [...new Set(reuseRequest.source.items.flatMap((item) => item.kind === 'recipe' ? [item.recipeId] : []))]
@@ -318,8 +319,8 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
         const recipes = Object.fromEntries(recipeEntries)
         const reusedState = buildMealReuseDraft(
           { days: day ? [day] : [], snapshots: cacheNow.snapshots },
-          { id: day?.id ?? crypto.randomUUID(), localDate: today, timeZone },
-          reuseRequest.source, recipes, () => crypto.randomUUID(),
+          { id: day?.id ?? createUuidV4(), localDate: today, timeZone },
+          reuseRequest.source, recipes, () => createUuidV4(),
         )
         if (cancelled) return
         const nextDay = reusedState.days.find((entry) => entry.id === day!.id)!

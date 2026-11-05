@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { requestPrivateJson } from './auth/client'
 import type { ConfirmedMealSnapshot, MealKind } from './domain/nutrition/journal'
 import type { MealReuseDTO } from './meal-reuse'
+import { createUuidV4 } from './secure-uuid.ts'
 import './meal-history.css'
 
 type Template = { id: string; name: string; revision: number; meal: { id: string; name: string; revision: number; meal: { kind: MealKind; label: string | null; items: ConfirmedMealSnapshot['items'] } }; createdAt: string; updatedAt: string }
@@ -41,7 +42,7 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Meal
     setSaving(true); setError('')
     try {
       const now = new Date().toISOString()
-      const id = crypto.randomUUID()
+      const id = createUuidV4()
       const meal = { id, name: name.trim(), revision: 1, meal: {
         kind: selected.mealKind, label: selected.label ?? null, items: selected.items,
       }, createdAt: now, updatedAt: now }

@@ -3,6 +3,8 @@ import test from 'node:test'
 import { createJournalDay, type ConfirmedMealSnapshot, type JournalState } from '../../src/domain/nutrition/journal.ts'
 import { buildMealReuseDraft, selectCurrentRecipeSnapshot, type MealReuseDTO } from '../../src/meal-reuse.ts'
 import type { ConfirmedRecipeSnapshot } from '../../src/domain/nutrition/recipe-snapshot.ts'
+import { createUuidV4 } from '../../src/secure-uuid.ts'
+import { fixtureRequest } from '../../src/dev-ui-fixtures.ts'
 
 test('reuse creates fresh editable draft identifiers without linking or changing its source snapshot', () => {
   const created = createJournalDay({ days: [], snapshots: [] }, {
@@ -70,4 +72,62 @@ test('recipe reuse selects highest confirmed revision and keeps the source snaps
   }
   assert.deepEqual(current, original)
   assert.equal(result.snapshots.length, 0)
+})
+
+function fallbackCrypto() {
+  let sequence = 0
+  return {
+    getRandomValues(bytes: Uint8Array) {
+      sequence += 1
+      bytes.fill(sequence)
+      return bytes
+    },
+  }
+}
+
+test('UUID v4 fallback uses secure random bytes, RFC version and variant bits, and produces unique IDs', () => {
+  const source = fallbackCrypto()
+  const ids = [createUuidV4(source), createUuidV4(source), createUuidV4(source)]
+  assert.equal(new Set(ids).size, ids.length)
+  for (const id of ids) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+})
+
+test('UUID generator prefers native randomUUID and fails clearly without a secure random API', () => {
+  let called = 0
+  const nativeId = '00000000-0000-4000-8000-000000000099'
+  assert.equal(createUuidV4({ randomUUID: () => { called += 1; return nativeId } }), nativeId)
+  assert.equal(called, 1)
+  assert.throws(() => createUuidV4({}), /cryptographie sécurisée/i)
+})
+
+test('fixture history can be reused into an independent food-and-recipe draft with UUID fallback', async () => {
+  const page = await fixtureRequest<{ meals: ConfirmedMealSnapshot[] }>('/api/private/journal/history?limit=20')
+  const sourceMeal = page.meals[0]!
+  const recipes = await fixtureRequest<{ snapshots: ConfirmedRecipeSnapshot[] }>('/api/private/recipes/fixture-recipe-bowl')
+  const recipe = recipes.snapshots[0]!
+  assert.ok(sourceMeal.items.some((item) => item.kind === 'recipe'), 'fixture source should include a recipe')
+  const items: MealReuseDTO['items'] = sourceMeal.items.map((item) => item.kind === 'food'
+    ? { kind: 'food', foodId: item.foodId, quantity: item.enteredQuantity, sortOrder: item.sortOrder }
+    : { kind: 'recipe', recipeId: item.recipeSnapshot.recipe.id, quantity: item.quantity, sortOrder: item.sortOrder })
+  const source: MealReuseDTO = { sourceKind: 'consumption', sourceId: sourceMeal.snapshotId,
+    label: sourceMeal.label, mealKind: sourceMeal.mealKind, items }
+  const cryptoFallback = fallbackCrypto()
+  const makeId = () => createUuidV4(cryptoFallback)
+  const dayId = makeId()
+  const day = createJournalDay({ days: [], snapshots: [] }, {
+    id: dayId, localDate: sourceMeal.localDate, timeZone: 'UTC',
+  }).days[0]!
+  const beforeSnapshots = structuredClone(page.meals)
+  const reused = buildMealReuseDraft({ days: [day], snapshots: page.meals },
+    { id: dayId, localDate: sourceMeal.localDate, timeZone: 'UTC' },
+    source, { [recipe.recipe.id]: recipe }, makeId)
+  const draft = reused.days[0]!.meals[0]!
+  const ids = [draft.id, ...draft.items.map((item) => item.id)]
+  assert.equal(new Set(ids).size, ids.length)
+  for (const id of ids) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  assert.equal(draft.supersedesSnapshotId, null)
+  assert.equal(draft.items.length, 2)
+  assert.ok(draft.items.some((item) => item.kind === 'food'))
+  assert.ok(draft.items.some((item) => item.kind === 'recipe'))
+  assert.deepEqual(reused.snapshots, beforeSnapshots)
 })
