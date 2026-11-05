@@ -1,4 +1,6 @@
 import { SupabaseAuthClient } from './supabase-auth'
+import { uiFixtureMode } from '../ui-fixture-mode'
+import { fixtureRequest } from '../dev-ui-fixtures'
 
 const env = import.meta.env
 
@@ -8,6 +10,7 @@ export const authClient = new SupabaseAuthClient({
 })
 
 export async function requestPrivateJson<T>(path: string, init?: RequestInit): Promise<T> {
+  if (uiFixtureMode) return fixtureRequest<T>(path, init)
   const response = await authClient.requestPrivate(path, init)
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null)

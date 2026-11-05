@@ -5,7 +5,17 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   server: {
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8787', changeOrigin: true },
+      '/api': {
+        target: 'http://127.0.0.1:8787',
+        changeOrigin: true,
+        configure(proxy) {
+          proxy.on('error', (_error, _request, response) => {
+            if (!('writeHead' in response) || response.headersSent) return
+            response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' })
+            response.end('API locale indisponible. Lancez npm run dev:stack, ou npm run dev:fixtures pour la recette UI synthétique.')
+          })
+        },
+      },
     },
   },
   plugins: [

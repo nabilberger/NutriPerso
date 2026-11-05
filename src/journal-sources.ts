@@ -1,6 +1,8 @@
 import type { JournalDayDraft } from './domain/nutrition/journal.ts'
 import type { FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
+import { uiFixtureMode } from './ui-fixture-mode'
+import { getFixtureFoodSource } from './dev-ui-fixtures'
 
 export async function loadFoodSources(
   day: JournalDayDraft,
@@ -10,6 +12,10 @@ export async function loadFoodSources(
 ): Promise<Readonly<Record<string, FoodNutritionSnapshot>>> {
   const ids = [...new Set(day.meals.flatMap((meal) => meal.items.flatMap((item) =>
     item.kind === 'food' && !cached[item.foodId] && !item.pinnedFoodSnapshot ? [item.foodId] : [])))]
+  if (uiFixtureMode) {
+    const fixtures = Object.fromEntries(ids.flatMap((foodId) => { const source = getFixtureFoodSource(foodId); return source ? [[foodId, source]] : [] }))
+    return isActive() ? { ...cached, ...fixtures } : cached
+  }
   const entries = await Promise.all(ids.map(async (foodId) => {
     const match = /^usda:(\d+)$/.exec(foodId)
     if (!match) return null
