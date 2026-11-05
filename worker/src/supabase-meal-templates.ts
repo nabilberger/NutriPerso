@@ -28,7 +28,7 @@ export async function saveMealTemplate(env: SupabaseCatalogEnv, scope: MealTempl
     || !Number.isSafeInteger(input.revision) || (input.revision as number) < 1) throw new MealTemplateError(400, 'Le modèle est invalide.')
   if (expectedRevision !== null && input.revision !== expectedRevision + 1) throw new MealTemplateError(409, 'La révision suivante est requise.')
   const template = { ...input.meal, id: input.id, name: input.name.trim(), revision: input.revision }
-  const url = new URL('/rest/v1/rpc/save_meal_template_atomic', env.SUPABASE_URL)
+  const url = tableUrl(env); url.pathname = '/rest/v1/rpc/save_meal_template_atomic'
   const response = await fetcher(url, { method: 'POST', headers: headers(env, 'return=representation'), body: JSON.stringify({
     p_user_id: scope.userId, p_template_id: input.id, p_name: input.name.trim(),
     p_revision: input.revision, p_template: template, p_expected_revision: expectedRevision,
