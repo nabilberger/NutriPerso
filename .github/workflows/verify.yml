@@ -17,3 +17,13 @@ jobs:
       - run: npm test
       - run: npx tsc --noEmit
       - run: npm run build
+
+  integration-db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run isolated PostgreSQL integration tests
+        run: docker compose -p nutriperso-int -f docker-compose.integration.yml up --abort-on-container-exit --exit-code-from test
+      - name: Stop only this test stack
+        if: always()
+        run: docker compose -p nutriperso-int -f docker-compose.integration.yml down --remove-orphans
