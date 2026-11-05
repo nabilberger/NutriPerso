@@ -31,17 +31,17 @@ test('template edits require a monotonically increasing expected revision', asyn
 
 test('template and immutable revision are submitted through one atomic RPC', async () => {
   let calls = 0
-  let body: Record<string, unknown> | null = null
+  const bodies: Record<string, unknown>[] = []
   const result = await saveMealTemplate(env, { userId: 'user-a' },
     { id, name: 'Déjeuner', revision: 1, meal: { items: [] } }, null,
     (async (input, init) => {
       calls += 1
       assert.equal(new URL(String(input)).pathname, '/rest/v1/rpc/save_meal_template_atomic')
-      body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
       return Response.json([row])
     }) as typeof fetch)
   assert.equal(calls, 1)
-  assert.equal(body?.p_expected_revision, null)
+  assert.equal(bodies[0]?.p_expected_revision, null)
   assert.equal(result.revision, 1)
 })
 
