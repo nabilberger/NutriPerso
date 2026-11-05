@@ -24,7 +24,7 @@ create table public.meal_template_revisions (
   revision bigint not null check (revision > 0),
   template jsonb not null check (jsonb_typeof(template) = 'object'),
   created_at timestamptz not null default now(),
-  primary key (template_id, revision),
+  primary key (template_id, revision)
 );
 alter table public.meal_template_revisions enable row level security;
 revoke all on public.meal_template_revisions from public, anon, authenticated;
