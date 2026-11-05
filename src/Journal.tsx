@@ -312,7 +312,7 @@ export default function Journal({ userId }: { readonly userId: string }) {
           } else {
             const current = await requestPrivateJson<{ snapshots: ConfirmedMealSnapshot[] }>(`/api/private/recipes/${encodeURIComponent(item.recipeSnapshot.recipe.id)}`)
             const latest = current.snapshots.at(-1)
-            if (!latest || latest.status !== 'confirmed') throw new Error('La recette actuelle est indisponible.')
+            if (!latest) throw new Error('Aucun instantané de recette actuel n’est disponible.')
             state = addRecipeJournalItem(state, day.id, mealId, { id, recipeSnapshot: latest as never, quantity: item.quantity, sortOrder: item.sortOrder })
           }
         }
