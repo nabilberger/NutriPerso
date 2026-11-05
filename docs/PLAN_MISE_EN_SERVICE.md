@@ -4,13 +4,13 @@
 
 ## État vérifié
 
-- PR #14 est ouverte et sans conflit : branche feat/3-journal-alimentaire à d4f7bfb3fd97db2f6b34f7fab1084c42e06d3aae, 3 commits devant et aucun derrière la branche design/nutriperso-editorial-dashboard.
+- PR #14 est ouverte et sans conflit : branche feat/3-journal-alimentaire à 888e226c7722b309136ac524e5adbd5df5ef40dc, 3 commits devant et aucun derrière la branche design/nutriperso-editorial-dashboard.
 - PR #1 est ouverte en brouillon et sans conflit : branche design à b75f0fcad1e659ce780e8e4dd0c6d292bde3bde9, 34 commits devant et aucun derrière main. La fusion vers main déclenche la publication Pages.
 - Six migrations locales existent. Quatre versions différentes sont inscrites à distance : 20261104154243 (recettes), 20261104165446 (journal), 20261104165450 (propriété recettes), 20261104234832 (profils/mesures). Le schéma correspondant est déjà présent. Le marqueur catalogue manque. La nouvelle migration 20261105183000 n’est pas appliquée.
 - Les huit tables attendues sont présentes et RLS est activée. Les colonnes, clés, contraintes, index et politiques inspectés correspondent aux migrations de catalogue, recettes, journal, propriété des recettes et profils/mesures.
 - Les RPC recettes ont search_path vide et sont exécutables par service_role seulement (pas anon ni authenticated). append_journal_snapshot est Security Invoker, search_path vide et exécutable par service_role seulement.
-- La RPC journal distante est antérieure à 20261105183000. Elle ne met pas à jour le brouillon de journée selon la règle récente d’annulation (révision incrémentée et brouillon de repas retiré).
-- Pages production sert le commit 0b0b9d41ece4a9a5dab7988afd39eb615ab17fe2. Les noms de variables VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY existent en preview et production et leurs valeurs correspondent au projet Supabase attendu.
+- La RPC distante `append_journal_snapshot` est `SECURITY INVOKER`, `search_path` vide, exécutable uniquement par `service_role`. Son différentiel fonctionnel avec `20261105183000` est confirmé : pour `void`, elle accepte `p_next_draft=p_expected_draft`, conserve `next_revision=current_day.revision` et n’actualise pas `journal_days`; la migration locale impose `revision+1`, retire le brouillon correspondant et met à jour `journal_days`. Cette migration est fonctionnellement nécessaire et non appliquée.
+- Pages production sert le commit 0b0b9d41ece4a9a5dab7988afd39eb615ab17fe2. Preview de `feat/3-journal-alimentaire` sert le HEAD `888e226c7722b309136ac524e5adbd5df5ef40dc` (5 novembre 2026). Les noms de variables VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY existent en preview et production; leurs valeurs ne sont pas exposées. L’association effective à Auth doit être vérifiée sans divulgation avant mise en service.
 - La route nutri.brainboost3d.com/api/* pointe vers nutri-perso-api. Les bindings FDC_API_KEY, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY et SUPABASE_URL existent par nom. La version à 100 % (d2c8091e-5f0a-40bb-a711-5384e956d5b5, 4 novembre) ne contient pas les routes Lot 0 de profil et mesures. La valeur de SUPABASE_URL Worker n’est pas consultable par l’API Cloudflare.
 - Le CLI Supabase n’est pas installé dans l’environnement inspecté. Les fichiers non suivis supabase/config.toml et supabase/.gitignore doivent être conservés.
 
@@ -89,3 +89,13 @@ Cette version n’a pas les routes profil/mesures et peut être incompatible ave
 ## Périmètre réalisé
 
 Les inspections ayant servi à ce plan sont en lecture seule. Le seul changement GitHub de cette mission est l’ajout de ce document à la branche de la PR #14. Aucune réparation d’historique, migration distante, écriture de données, fusion ni mise en production n’a été effectuée.
+
+
+## Décision de mise en service — preuves superviseur (5 novembre 2026)
+
+- **Confirmé en lecture seule :** Supabase `NutriPerso` (`vrpiwifrlbhdordahmik`), `ACTIVE_HEALTHY`, eu-west-1; quatre versions distantes seulement : `20261104154243`, `20261104165446`, `20261104165450`, `20261104234832`. Huit tables public attendues présentes avec RLS. Aucune migration catalogue ni `20261105183000` dans le registre.
+- **SQL :** le delta de la RPC d’annulation ci-dessus est matériel. Ne pas faire `migration repair` en supposant que la migration `20261105183000` est déjà représentée par le schéma. Les repair candidates ne sont prêtes qu’après preuve objet-par-objet de l’équivalence des cinq migrations historiques, sauvegarde/restauration testée et validation explicite. Le `db push` de `20261105183000` demande une autorisation distincte et doit suivre le dry-run revu.
+- **Cloudflare confirmé :** Pages `nutriperso`, production `main`, domaines `nutriperso.pages.dev` et `nutri.brainboost3d.com`; variables frontend présentes par nom en preview/production. Preview de la branche #14 au HEAD ci-dessus. Worker `nutri-perso-api` déployé à 100 % sur `d2c8091e-5f0a-40bb-a711-5384e956d5b5` le 4 novembre 20:58 UTC; aucun déploiement Lot 1 confirmé. Le plan précédent affirmait sans preuve que les valeurs Pages correspondent au projet : cette affirmation est retirée. La route preview `/api` isolée et les valeurs Pages→Auth restent à vérifier.
+- **Prêt sans écriture :** produire la comparaison complète des cinq migrations historiques contre schéma/objets distants, préparer backup+restauration vérifiable, confirmer routage preview isolé et relation variables Pages/Auth sans afficher valeurs, valider CI et le SHA source Worker.
+- **Validation nécessaire :** autorisation explicite et ciblée pour réparation du registre, application de `20261105183000`, déploiement Worker, puis merge/Pages production. Aucune de ces opérations n’est autorisée par la présente mise à jour. Plan de transition coordonné RPC/Worker requis pour limiter l’incompatibilité de contrat.
+
