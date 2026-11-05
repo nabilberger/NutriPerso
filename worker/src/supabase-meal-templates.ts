@@ -26,8 +26,14 @@ export async function saveMealTemplate(env: SupabaseCatalogEnv, scope: MealTempl
   if (!isRecord(input) || !isRecord(input.meal) || typeof input.id !== 'string' || !isUuid(input.id)
     || typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 80
     || !Number.isSafeInteger(input.revision) || (input.revision as number) < 1) throw new MealTemplateError(400, 'Le modèle est invalide.')
+  if (expectedRevision !== null && input.revision !== expectedRevision + 1) throw new MealTemplateError(409, 'La révision suivante est requise.')
   const url = tableUrl(env)
-  url.searchParams.set('on_conflict', 'id')
+  if (expectedRevision === null) url.searchParams.set('on_conflict', 'id')
+  else {
+    url.searchParams.set('id', `eq.${input.id}`)
+    url.searchParams.set('user_id', `eq.${scope.userId}`)
+    url.searchParams.set('revision', `eq.${expectedRevision}`)
+  }
   const template = { ...input.meal, id: input.id, name: input.name.trim(), revision: input.revision }
   const row = { id: input.id, user_id: scope.userId, name: input.name.trim(), revision: input.revision, template }
   const response = await fetcher(url, { method: expectedRevision === null ? 'POST' : 'PATCH', headers: headers(env, 'return=representation'), body: JSON.stringify(row) })
