@@ -103,7 +103,7 @@ test('fixture adapter runs reuse → confirmation → correction → confirmatio
   assert.equal((await activeFor(first.logicalMealId)).length, 1)
   assert.notDeepEqual(corrected.totals.protein, first.totals.protein)
   const afterCorrection = await fixtureRequest<{ journal: { day: JournalDayDraft; snapshots: ConfirmedMealSnapshot[] } }>(`/api/private/journal?date=${today}`)
-  const correctedDaily = calculateJournalDay(afterCorrection.journal, afterCorrection.journal.day.id).protein
+  const correctedDaily = calculateJournalDay({ days: [afterCorrection.journal.day], snapshots: afterCorrection.journal.snapshots }, afterCorrection.journal.day.id).protein
   assert.ok(correctedDaily)
   assert.ok(baseline)
   assert.equal(selectActiveMealSnapshots(afterCorrection.journal.snapshots).filter(s => s.logicalMealId === first.logicalMealId).length, 1)
@@ -116,7 +116,7 @@ test('fixture adapter runs reuse → confirmation → correction → confirmatio
   assert.equal(cancel.snapshot.supersedesSnapshotId, corrected.snapshotId)
   const afterCancel = await fixtureRequest<{ journal: { day: JournalDayDraft; snapshots: ConfirmedMealSnapshot[] } }>(`/api/private/journal?date=${today}`)
   assert.equal(selectActiveMealSnapshots(afterCancel.journal.snapshots).filter(s => s.logicalMealId === first.logicalMealId).length, 0)
-  const cancelledDaily = calculateJournalDay(afterCancel.journal, afterCancel.journal.day.id).protein
+  const cancelledDaily = calculateJournalDay({ days: [afterCancel.journal.day], snapshots: afterCancel.journal.snapshots }, afterCancel.journal.day.id).protein
   assert.deepEqual(cancelledDaily, baseline)
   assert.deepEqual(first, originalCopy)
 
