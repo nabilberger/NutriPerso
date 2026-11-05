@@ -115,7 +115,7 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
     history.splice(0,history.length,...result.state.snapshots)
     return {day:updated,snapshot:result.snapshot} as T
   }
-  const cancelPath=/^\\/api\\/private\\/journal\\/snapshots\\/([^/]+)\\/cancel$/.exec(url.pathname)
+  const cancelPath=/^\/api\/private\/journal\/snapshots\/([^/]+)\/cancel$/.exec(url.pathname)
   if(cancelPath&&method==='POST'){
     const data=body(init),snapshotId=decodeURIComponent(cancelPath[1]!)
     const input={newSnapshotId:String(data.newSnapshotId),confirmedAt:String(data.confirmedAt),engineVersion:String(data.engineVersion)}
