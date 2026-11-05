@@ -53,8 +53,8 @@ function fromRow(row: Row, owner: string): MealTemplate {
     || row.template.name !== row.name || row.template.revision !== row.revision) throw new MealTemplateError(502, 'Réponse de modèle invalide.')
   return { id: row.id, name: row.name, revision: row.revision, meal: row.template, createdAt: row.created_at, updatedAt: row.updated_at }
 }
-function tableUrl(env: SupabaseCatalogEnv): URL { return new URL('/rest/v1/meal_templates', env.SUPABASE_URL) }
-function headers(env: SupabaseCatalogEnv, prefer: string): HeadersInit { return { apikey: env.SUPABASE_PUBLISHABLE_KEY, authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`, 'content-type': 'application/json', prefer } }
+function tableUrl(env: SupabaseCatalogEnv): URL { if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new MealTemplateError(503, 'Stockage des modèles non configuré.'); return new URL('/rest/v1/meal_templates', env.SUPABASE_URL) }
+function headers(env: SupabaseCatalogEnv, prefer: string): HeadersInit { return { apikey: env.SUPABASE_SECRET_KEY, authorization: `Bearer ${env.SUPABASE_SECRET_KEY}`, 'content-type': 'application/json', prefer } }
 async function request<T>(env: SupabaseCatalogEnv, url: URL, fetcher: typeof fetch): Promise<T> { const r = await fetcher(url, { headers: headers(env, 'return=representation') }); if (!r.ok) throw new MealTemplateError(502, 'Les modèles n’ont pas pu être chargés.'); return await r.json() as T }
 function isRecord(v: unknown): v is Record<string, unknown> { return typeof v === 'object' && v !== null && !Array.isArray(v) }
 function isUuid(v: string): boolean { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v) }
