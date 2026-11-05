@@ -82,7 +82,7 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Conf
     </section>
     <section className="data-card"><h2>Modèles enregistrés</h2>{templates.length ? <div className="history-list">{templates.map((item) => <article key={item.id}>
       <div><b>{item.name}</b><small>Modèle enregistré volontairement · v{item.revision}</small></div>
-      <button type="button" onClick={() => onReuse({ ...item.meal, snapshotId: item.id } as unknown as ConfirmedMealSnapshot)}>Réutiliser</button>
+      <button type="button" onClick={() => onReuse({ snapshotId: item.id, logicalMealId: item.id, mealKind: (item.meal.meal as Record<string, unknown>).kind, label: item.name, items: (item.meal.meal as Record<string, unknown>).items, localDate: new Date().toISOString().slice(0, 10), confirmedAt: new Date().toISOString(), status: 'confirmed' } as unknown as ConfirmedMealSnapshot)}>Réutiliser</button>
       <button type="button" onClick={() => void renameTemplate(item)}>Renommer</button><button type="button" onClick={() => void deleteTemplate(item)}>Supprimer</button>
     </article>)}</div> : <div className="data-empty">Aucun modèle enregistré. Enregistrez-en un depuis une consommation.</div>}</section>
     {selected && <div className="history-dialog" role="dialog" aria-modal="true" aria-labelledby="template-title"><form onSubmit={(e) => { e.preventDefault(); void saveTemplate() }}>
