@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { requestPrivateJson } from './auth/client'
-import type { ConfirmedMealSnapshot } from './domain/nutrition/journal'
+import type { ConfirmedMealSnapshot, MealKind } from './domain/nutrition/journal'
+import type { MealReuseDTO } from './meal-reuse'
 import './meal-history.css'
 
-type Template = { id: string; name: string; revision: number; meal: Record<string, unknown>; createdAt: string; updatedAt: string }
+type Template = { id: string; name: string; revision: number; meal: { id: string; name: string; revision: number; meal: { kind: MealKind; label: string | null; items: ConfirmedMealSnapshot['items'] } }; createdAt: string; updatedAt: string }
 type Page = { meals: ConfirmedMealSnapshot[]; total: number; limit: number; offset: number }
 
-export default function MealHistory({ onReuse }: { readonly onReuse: (meal: ConfirmedMealSnapshot) => void }) {
+export default function MealHistory({ onReuse }: { readonly onReuse: (meal: MealReuseDTO) => void }) {
   const [page, setPage] = useState<Page>({ meals: [], total: 0, limit: 20, offset: 0 })
   const [templates, setTemplates] = useState<Template[]>([])
   const [query, setQuery] = useState('')
@@ -38,7 +39,7 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Conf
       const now = new Date().toISOString()
       const id = crypto.randomUUID()
       const meal = { id, name: name.trim(), revision: 1, meal: {
-        kind: selected.mealKind, label: selected.label, items: selected.items,
+        kind: selected.mealKind, label: selected.label ?? null, items: selected.items,
       }, createdAt: now, updatedAt: now }
       const result = await requestPrivateJson<{ template: Template }>(`/api/private/meal-templates/${id}`, {
         method: 'PUT', body: JSON.stringify({ template: meal, expectedRevision: null }),
@@ -76,13 +77,13 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Conf
     <section className="data-card"><h2>Consommations récentes</h2><p className="data-muted">Les 20 dernières consommations confirmées. La recherche et les dates retrouvent les plus anciennes.</p>
       {loading ? <p role="status">Chargement de l’historique…</p> : recent.length ? <div className="history-list">{recent.map((meal) => <article key={meal.snapshotId}>
         <div><b>{meal.label || meal.items.map((i) => i.kind === 'food' ? i.foodSnapshot.description : i.recipeSnapshot.recipe.name).join(', ')}</b><small>{meal.localDate} · {meal.mealKind} · confirmé</small></div>
-        <button type="button" onClick={() => onReuse(meal)}>Réutiliser</button><button type="button" onClick={() => { setSelected(meal); setName('') }}>Enregistrer comme modèle</button>
+        <button type="button" onClick={() => onReuse(snapshotToReuse(meal))}>Réutiliser</button><button type="button" onClick={() => { setSelected(meal); setName('') }}>Enregistrer comme modèle</button>
       </article>)}</div> : <div className="data-empty">Aucune consommation confirmée ne correspond à ces filtres.</div>}
       <div className="history-pages"><button type="button" disabled={page.offset === 0 || loading} onClick={() => setPage((p) => ({ ...p, offset: Math.max(0, p.offset - 20) }))}>Précédent</button><span>{page.total ? page.offset + 1 : 0}–{Math.min(page.total, page.offset + 20)} / {page.total}</span><button type="button" disabled={page.offset + 20 >= page.total || loading} onClick={() => setPage((p) => ({ ...p, offset: p.offset + 20 }))}>Suivant</button></div>
     </section>
     <section className="data-card"><h2>Modèles enregistrés</h2>{templates.length ? <div className="history-list">{templates.map((item) => <article key={item.id}>
       <div><b>{item.name}</b><small>Modèle enregistré volontairement · v{item.revision}</small></div>
-      <button type="button" onClick={() => onReuse({ snapshotId: item.id, logicalMealId: item.id, mealKind: (item.meal.meal as Record<string, unknown>).kind, label: item.name, items: (item.meal.meal as Record<string, unknown>).items, localDate: new Date().toISOString().slice(0, 10), confirmedAt: new Date().toISOString(), status: 'confirmed' } as unknown as ConfirmedMealSnapshot)}>Réutiliser</button>
+      <button type="button" onClick={() => onReuse(templateToReuse(item))}>Réutiliser</button>
       <button type="button" onClick={() => void renameTemplate(item)}>Renommer</button><button type="button" onClick={() => void deleteTemplate(item)}>Supprimer</button>
     </article>)}</div> : <div className="data-empty">Aucun modèle enregistré. Enregistrez-en un depuis une consommation.</div>}</section>
     {selected && <div className="history-dialog" role="dialog" aria-modal="true" aria-labelledby="template-title"><form onSubmit={(e) => { e.preventDefault(); void saveTemplate() }}>
@@ -91,4 +92,17 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Conf
       <button type="button" onClick={() => setSelected(null)}>Annuler</button><button disabled={saving || !name.trim()} type="submit">{saving ? 'Enregistrement…' : 'Enregistrer'}</button>
     </form></div>}
   </section>
+}
+
+function snapshotToReuse(snapshot: ConfirmedMealSnapshot): MealReuseDTO {
+  return { sourceKind: 'consumption', sourceId: snapshot.snapshotId, label: snapshot.label ?? null, mealKind: snapshot.mealKind,
+    items: snapshot.items.map((item) => item.kind === 'food'
+      ? { kind: 'food', foodId: item.foodId, quantity: item.enteredQuantity, sortOrder: item.sortOrder }
+      : { kind: 'recipe', recipeId: item.recipeSnapshot.recipe.id, quantity: item.quantity, sortOrder: item.sortOrder }) }
+}
+function templateToReuse(template: Template): MealReuseDTO {
+  return { sourceKind: 'template', sourceId: template.id, label: template.name, mealKind: template.meal.meal.kind,
+    items: template.meal.meal.items.map((item) => item.kind === 'food'
+      ? { kind: 'food', foodId: item.foodId, quantity: item.enteredQuantity, sortOrder: item.sortOrder }
+      : { kind: 'recipe', recipeId: item.recipeSnapshot.recipe.id, quantity: item.quantity, sortOrder: item.sortOrder }) }
 }
