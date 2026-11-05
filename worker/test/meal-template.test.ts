@@ -28,3 +28,39 @@ test('template edits require a monotonically increasing expected revision', asyn
     { id, name: 'Déjeuner', revision: 3, meal: {} }, 1, (async () => Response.json([row])) as typeof fetch),
     (error: unknown) => error instanceof MealTemplateError && error.status === 409)
 })
+
+test('template and immutable revision are submitted through one atomic RPC', async () => {
+  let calls = 0
+  let body: Record<string, unknown> | null = null
+  const result = await saveMealTemplate(env, { userId: 'user-a' },
+    { id, name: 'Déjeuner', revision: 1, meal: { items: [] } }, null,
+    (async (input, init) => {
+      calls += 1
+      assert.equal(new URL(String(input)).pathname, '/rest/v1/rpc/save_meal_template_atomic')
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return Response.json([row])
+    }) as typeof fetch)
+  assert.equal(calls, 1)
+  assert.equal(body?.p_expected_revision, null)
+  assert.equal(result.revision, 1)
+})
+
+test('failed atomic RPC cannot leave a template row written by a preceding request', async () => {
+  let calls = 0
+  await assert.rejects(() => saveMealTemplate(env, { userId: 'user-a' },
+    { id, name: 'Déjeuner', revision: 1, meal: { items: [] } }, null,
+    (async () => { calls += 1; return new Response('database unavailable', { status: 503 }) }) as typeof fetch),
+    (error: unknown) => error instanceof MealTemplateError)
+  assert.equal(calls, 1)
+})
+
+test('database revision conflict is surfaced without accepting a stale edit', async () => {
+  await assert.rejects(() => saveMealTemplate(env, { userId: 'user-a' },
+    { id, name: 'Déjeuner', revision: 2, meal: { items: [] } }, 1,
+    (async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      assert.equal(body.p_expected_revision, 1)
+      return new Response('revision conflict', { status: 409 })
+    }) as typeof fetch),
+    (error: unknown) => error instanceof MealTemplateError && error.status === 409)
+})
