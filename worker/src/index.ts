@@ -14,6 +14,7 @@ import { getProfile, saveProfile, ProfileError } from './supabase-profile.ts'
 import {listMeasurements, addMeasurement, deleteMeasurement} from './supabase-measurements.ts'
 import { getActiveJournalSnapshots } from './supabase-journal.ts'
 import { deleteMealTemplate, listMealTemplates, MealTemplateError, saveMealTemplate } from './supabase-meal-templates.ts'
+import { filterMealHistory, paginateMealHistory } from './meal-history.ts'
 
 type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv
 type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
@@ -160,11 +161,8 @@ app.get('/api/private/journal/history', async (c) => {
     if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))) {
       return c.json({ error: { code: 'INVALID_FILTER', message: 'Les dates de filtre sont invalides.' } }, 400)
     }
-    const active = [...await getActiveJournalSnapshots(c.env, c.get('userScope'), fetcher)]
-      .filter((snapshot) => snapshot.status === 'confirmed' && (!from || snapshot.localDate >= from) && (!to || snapshot.localDate <= to))
-      .filter((snapshot) => !query || [snapshot.label ?? '', ...snapshot.items.map((item) => item.kind === 'food' ? item.foodSnapshot.description : item.recipeSnapshot.recipe.name)].join(' ').toLocaleLowerCase().includes(query))
-      .sort((a, b) => b.localDate.localeCompare(a.localDate) || b.confirmedAt.localeCompare(a.confirmedAt))
-    return c.json({ meals: active.slice(offset, offset + limit), total: active.length, limit, offset })
+    const active = filterMealHistory(await getActiveJournalSnapshots(c.env, c.get('userScope'), fetcher), { query, from, to })
+    return c.json(paginateMealHistory(active, offset, limit))
   } catch (error) { return respondPersistenceError(c, error) }
 })
 
