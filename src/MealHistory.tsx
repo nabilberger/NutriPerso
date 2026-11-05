@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { requestPrivateJson } from './auth/client'
 import type { ConfirmedMealSnapshot, MealKind } from './domain/nutrition/journal'
 import type { MealReuseDTO } from './meal-reuse'
@@ -9,6 +9,8 @@ type Page = { meals: ConfirmedMealSnapshot[]; total: number; limit: number; offs
 
 export default function MealHistory({ onReuse }: { readonly onReuse: (meal: MealReuseDTO) => void }) {
   const [page, setPage] = useState<Page>({ meals: [], total: 0, limit: 20, offset: 0 })
+  const [recentMeals, setRecentMeals] = useState<ConfirmedMealSnapshot[]>([])
+  const requestSequence = useRef(0)
   const [templates, setTemplates] = useState<Template[]>([])
   const [query, setQuery] = useState('')
   const [from, setFrom] = useState('')
@@ -20,18 +22,20 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Meal
   const [saving, setSaving] = useState(false)
 
   async function load() {
+    const sequence = ++requestSequence.current
     setLoading(true); setError('')
     try {
-      const [history, saved] = await Promise.all([
+      const [history, recent, saved] = await Promise.all([
         requestPrivateJson<Page>(`/api/private/journal/history?limit=20&offset=${page.offset}&q=${encodeURIComponent(query)}&from=${from}&to=${to}`),
+        requestPrivateJson<Page>('/api/private/journal/history?limit=20&offset=0'),
         requestPrivateJson<{ templates: Template[] }>('/api/private/meal-templates'),
       ])
-      setPage(history); setTemplates(saved.templates)
-    } catch (e) { setError(e instanceof Error ? e.message : 'Historique indisponible.') }
-    finally { setLoading(false) }
+      if (sequence !== requestSequence.current) return
+      setPage(history); setRecentMeals(recent.meals); setTemplates(saved.templates)
+    } catch (e) { if (sequence === requestSequence.current) setError(e instanceof Error ? e.message : 'Historique indisponible.') }
+    finally { if (sequence === requestSequence.current) setLoading(false) }
   }
   useEffect(() => { void load() }, [page.offset, query, from, to])
-  const recent = useMemo(() => page.meals.slice(0, 20), [page.meals])
   async function saveTemplate() {
     if (!selected || !name.trim()) return
     setSaving(true); setError('')
@@ -74,8 +78,8 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Meal
       <label>Rechercher un repas ou un aliment<input value={query} onChange={(e) => { setPage((p) => ({ ...p, offset: 0 })); setQuery(e.target.value) }} /></label>
       <div><label>Depuis<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label><label>Jusqu’au<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label></div>
     </section>
-    <section className="data-card"><h2>Consommations récentes</h2><p className="data-muted">Les 20 dernières consommations confirmées. La recherche et les dates retrouvent les plus anciennes.</p>
-      {loading ? <p role="status">Chargement de l’historique…</p> : recent.length ? <div className="history-list">{recent.map((meal) => <article key={meal.snapshotId}>
+    <section className="data-card"><h2>20 consommations les plus récentes</h2><p className="data-muted">Ce raccourci reste indépendant des filtres de recherche.</p>
+      {loading ? <p role="status">Chargement des repas récents…</p> : recentMeals.length ? <div className="history-list">{recentMeals.map((meal) => <article key={meal.snapshotId}>
         <div><b>{meal.label || meal.items.map((i) => i.kind === 'food' ? i.foodSnapshot.description : i.recipeSnapshot.recipe.name).join(', ')}</b><small>{meal.localDate} · {meal.mealKind} · confirmé</small></div>
         <button type="button" onClick={() => onReuse(snapshotToReuse(meal))}>Réutiliser</button><button type="button" onClick={() => { setSelected(meal); setName('') }}>Enregistrer comme modèle</button>
       </article>)}</div> : <div className="data-empty">Aucune consommation confirmée ne correspond à ces filtres.</div>}
