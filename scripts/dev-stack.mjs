@@ -3,9 +3,9 @@ import { access, readFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { setTimeout as delay } from 'node:timers/promises'
 import net from 'node:net'
-const required=['SUPABASE_URL','SUPABASE_PUBLISHABLE_KEY','SUPABASE_SECRET_KEY','FDC_API_KEY']
+import { missingWorkerVars } from './dev-stack-config.mjs'
 try{await access('.dev.vars',constants.R_OK)}catch{console.error('Configuration locale absente : copiez .dev.vars.example vers .dev.vars et renseignez les valeurs localement. Aucun secret ne doit être commité.');process.exit(1)}
-const vars=await readFile('.dev.vars','utf8'),missing=required.filter(k=>!new RegExp('^\\s*'+k+'\\s*=','m').test(vars))
+const vars=await readFile('.dev.vars','utf8'),missing=missingWorkerVars(vars)
 if(missing.length){console.error('Variables manquantes dans .dev.vars : '+missing.join(', ')+'. Les valeurs ne sont jamais affichées.');process.exit(1)}
 const npm=process.platform==='win32'?'npm.cmd':'npm',children=[];let stopping=false
 function start(args){const child=spawn(npm,args,{stdio:'inherit',env:process.env,shell:process.platform==='win32'});children.push(child);child.once('exit',code=>{if(!stopping){stopping=true;for(const other of children)if(other!==child)other.kill('SIGTERM');process.exitCode=code??1}});return child}

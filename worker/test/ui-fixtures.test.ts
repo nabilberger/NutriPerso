@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { shouldEnableUiFixtures } from '../../src/ui-fixture-mode.ts'
 import { fixtureRequest } from '../../src/dev-ui-fixtures.ts'
+import { missingWorkerVars } from '../../scripts/dev-stack-config.mjs'
 test('fixtures require development and explicit opt-in; production stays disabled',()=>{
  assert.equal(shouldEnableUiFixtures(false,'1'),false)
  assert.equal(shouldEnableUiFixtures(true,undefined),false)
@@ -26,4 +27,9 @@ test('template changes are held in memory only',async()=>{
 })
 test('unmapped fixture routes fail locally without a network fallback',async()=>{
  await assert.rejects(()=>fixtureRequest('/api/private/unmocked'),/aucun appel réseau effectué/)
+})
+
+test('connected local startup checks required variable names without printing or parsing their values',()=>{
+ assert.deepEqual(missingWorkerVars(''),['SUPABASE_URL','SUPABASE_PUBLISHABLE_KEY','SUPABASE_SECRET_KEY','FDC_API_KEY'])
+ assert.deepEqual(missingWorkerVars('SUPABASE_URL=https://local.invalid\nSUPABASE_PUBLISHABLE_KEY=public\nSUPABASE_SECRET_KEY=private\nFDC_API_KEY=local'),[])
 })
