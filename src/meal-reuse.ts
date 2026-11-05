@@ -34,7 +34,7 @@ export function buildMealReuseDraft(
 ): JournalState {
   let state = initial
   if (!state.days.some((day) => day.id === dayInput.id)) state = createJournalDay(state, dayInput)
-  state = createMeal(state, dayInput.id, { id: makeId(), kind: source.mealKind, label: source.label, occurredAt: new Date().toISOString() })
+  state = createMeal(state, dayInput.id, { id: makeId(), kind: source.mealKind, label: source.label, occurredAt: null })
   const mealId = state.days.find((day) => day.id === dayInput.id)!.meals.at(-1)!.id
   for (const item of source.items) {
     const id = makeId()
