@@ -291,7 +291,8 @@ export default function Journal({ userId }: { readonly userId: string }) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'L’aliment n’a pas pu être ajouté.') }
   }
 
-  async function attachPhoto(file: File | undefined) {
+  async function attachPhoto(file: File | undefined, input: HTMLInputElement) {
+    input.value = ''
     if (!file) return
     try {
       commit({ ...cacheRef.current, photoDataUrl: await compressPhoto(file) })
@@ -315,7 +316,7 @@ export default function Journal({ userId }: { readonly userId: string }) {
         {sections.map((item) => <div className="journal-total" key={item.code}><small>{item.label}</small><strong>{formatTotal(totals[item.code], item.unit)}</strong><span>{item.unit}</span></div>)}
       </section>
       <section className="journal-meals-section">
-        <div className="journal-section-heading"><div><small>MES REPAS</small><h2>{cache.day?.meals.length ?? 0} brouillon(s) · {activeSnapshots.length} confirmé(s)</h2></div><div className="journal-secondary-actions"><label className="journal-photo-button">Joindre une photo<input type="file" accept="image/*" capture="environment" onChange={(event) => void attachPhoto(event.currentTarget.files?.[0])}/></label><button type="button" className="journal-primary" onClick={() => { setNewMealTime(localDateTimeInput(new Date(date + 'T12:00:00'))); setAddingMeal(true) }}>+ Ajouter un repas</button></div></div>
+        <div className="journal-section-heading"><div><small>MES REPAS</small><h2>{cache.day?.meals.length ?? 0} brouillon(s) · {activeSnapshots.length} confirmé(s)</h2></div><div className="journal-secondary-actions"><label className="journal-photo-button">Prendre une photo<input type="file" accept="image/*" capture="environment" aria-label="Prendre une photo avec l’appareil photo" onChange={(event) => void attachPhoto(event.currentTarget.files?.[0], event.currentTarget)}/></label><label className="journal-photo-button">Choisir dans la galerie / fichiers<input type="file" accept="image/*" aria-label="Choisir une photo dans la galerie ou les fichiers" onChange={(event) => void attachPhoto(event.currentTarget.files?.[0], event.currentTarget)}/></label><button type="button" className="journal-primary" onClick={() => { setNewMealTime(localDateTimeInput(new Date(date + 'T12:00:00'))); setAddingMeal(true) }}>+ Ajouter un repas</button></div></div>
         {cache.day?.meals.map((meal) => <article className="journal-meal" key={meal.id}>
           <div className="journal-meal-header">
             <div className="journal-meal-kind"><span className="meal-dot"/><select aria-label="Catégorie du repas" value={meal.kind} onChange={(event) => mutate((current) => updateMealDetails(current, cache.day!.id, meal.id, { kind: event.target.value as MealKind }))}>{Object.entries(mealLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
