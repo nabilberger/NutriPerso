@@ -10,22 +10,21 @@ const row = { id, user_id: 'user-a', name: 'Déjeuner', revision: 1,
 
 test('meal template listing is scoped to the authenticated owner', async () => {
   let requested = ''
-  const result = await listMealTemplates(env, { userId: 'user-a' }, async (input) => {
+  const result = await listMealTemplates(env, { userId: 'user-a' }, (async (input) => {
     requested = String(input)
     return Response.json([row])
-  } as typeof fetch)
+  }) as typeof fetch)
   assert.equal(new URL(requested).searchParams.get('user_id'), 'eq.user-a')
   assert.equal(result[0]?.name, 'Déjeuner')
 })
 
 test('meal template listing rejects any foreign-owner row defensively', async () => {
-  await assert.rejects(() => listMealTemplates(env, { userId: 'user-a' }, async () =>
-    Response.json([{ ...row, user_id: 'user-b' }]) as Response) as typeof fetch),
+  await assert.rejects(() => listMealTemplates(env, { userId: 'user-a' }, (async () => Response.json([{ ...row, user_id: 'user-b' }])) as typeof fetch),
     (error: unknown) => error instanceof MealTemplateError)
 })
 
 test('template edits require a monotonically increasing expected revision', async () => {
   await assert.rejects(() => saveMealTemplate(env, { userId: 'user-a' },
-    { id, name: 'Déjeuner', revision: 3, meal: {} }, 1, async () => Response.json([row]) as Response),
+    { id, name: 'Déjeuner', revision: 3, meal: {} }, 1, (async () => Response.json([row])) as typeof fetch),
     (error: unknown) => error instanceof MealTemplateError && error.status === 409)
 })
