@@ -1,4 +1,5 @@
-import type { FoodQuantityInput, RecipeJournalQuantity } from './domain/nutrition/portions.ts'
+import type { FoodQuantityInput } from './domain/nutrition/portions.ts'
+import type { RecipeJournalQuantity } from './domain/nutrition/journal.ts'
 import type { MealKind } from './domain/nutrition/journal.ts'
 
 export type MealReuseItem =
