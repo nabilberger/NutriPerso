@@ -326,7 +326,9 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
         const nextDay = reusedState.days.find((entry) => entry.id === day!.id)!
         const currentFoods = { ...cacheNow.sources }
         for (const item of reuseRequest.source.items) if (item.kind === 'food') delete currentFoods[item.foodId]
-        commit({ ...cacheNow, day: nextDay, sources: currentFoods, dirty: true })
+        const currentSources = await loadFoodSources(nextDay, currentFoods, () => !cancelled)
+        if (cancelled) return
+        commit({ ...cacheNow, day: nextDay, sources: currentSources, dirty: true })
         setSyncMessage(navigator.onLine ? 'Nouveau brouillon créé. Vérifiez les quantités avant confirmation.' : 'Brouillon créé hors ligne; il sera synchronisé lorsque la connexion sera rétablie.')
         onReuseConsumed()
       } catch (reason) {
