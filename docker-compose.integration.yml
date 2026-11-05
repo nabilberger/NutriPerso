@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: nutriperso_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-only-nutriperso
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nutriperso_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./supabase/tests/local/bootstrap.sql:/docker-entrypoint-initdb.d/00-bootstrap.sql:ro
+      - ./supabase/migrations/20261106100000_meal_templates.sql:/docker-entrypoint-initdb.d/10-meal-templates.sql:ro
+
+  test:
+    image: postgres:17
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: local-only-nutriperso
+    entrypoint: ["bash", "-ec"]
+    command: >-
+      until pg_isready -h db -U postgres -d nutriperso_test; do sleep 1; done;
+      psql -h db -U postgres -d nutriperso_test -v ON_ERROR_STOP=1
+      -f /tests/meal-templates.integration.sql
+    volumes:
+      - ./supabase/tests/local/meal-templates.integration.sql:/tests/meal-templates.integration.sql:ro
