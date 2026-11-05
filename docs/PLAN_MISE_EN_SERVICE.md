@@ -99,3 +99,36 @@ Les inspections ayant servi à ce plan sont en lecture seule. Le seul changement
 - **Prêt sans écriture :** produire la comparaison complète des cinq migrations historiques contre schéma/objets distants, préparer backup+restauration vérifiable, confirmer routage preview isolé et relation variables Pages/Auth sans afficher valeurs, valider CI et le SHA source Worker.
 - **Validation nécessaire :** autorisation explicite et ciblée pour réparation du registre, application de `20261105183000`, déploiement Worker, puis merge/Pages production. Aucune de ces opérations n’est autorisée par la présente mise à jour. Plan de transition coordonné RPC/Worker requis pour limiter l’incompatibilité de contrat.
 
+
+
+## Mission 006 — état des vérifications finales
+
+### Supabase : compatibilité historique (lecture seule)
+Projet vérifié : `NutriPerso`, ref `vrpiwifrlbhdordahmik`, `ACTIVE_HEALTHY`, région `eu-west-1`. Le registre contient exactement quatre versions : `20261104154243`, `20261104165446`, `20261104165450`, `20261104234832`. Les migrations locales candidates sont `20261103175325_food_catalog`, `20261104143804_recipe_persistence`, `20261104160000_journal_persistence`, `20261104170000_recipe_user_ownership`, `20261104234000_user_profiles`. Lecture Supabase confirme les huit tables attendues et RLS; la preuve indépendante du ticket confirme la restriction EXECUTE de la RPC journal et son différentiel de void.
+
+**Limite de preuve :** l’API de lecture de schéma consultée renvoie colonnes, PK/FK et RLS, mais pas une définition exhaustive vérifiable de tous les CHECK, index, triggers, politiques et définitions SQL des fonctions pour chaque migration. L’équivalence stricte des cinq fichiers n’est donc pas démontrée; ne pas lancer de réparation du registre. Le différentiel `append_journal_snapshot` est intentionnel et doit être corrigé par `20261105183000` dans une fenêtre coordonnée Worker/DB, après décision.
+
+Commandes candidates, non exécutées, après extraction protégée de `pg_dump --schema-only --no-owner --no-privileges`, revue objet-par-objet et restauration d’essai réussie :
+
+```sh
+npx supabase migration repair 20261104154243 20261104165446 20261104165450 20261104234832 --status reverted --linked
+npx supabase migration repair 20261103175325 20261104143804 20261104160000 20261104170000 20261104234000 --status applied --linked
+npx supabase migration list --linked
+npx supabase db push --linked --dry-run
+# Après revue du dry-run et autorisation distincte seulement :
+npx supabase db push --linked
+```
+Arrêt si le dry-run propose autre chose que `20261105183000_journal_delete_precedence.sql`. Ne pas utiliser `db reset --linked`. Les repair changent le ledger, pas le SQL; push de la migration est une opération distante distincte et requiert approbation distincte.
+
+### Cloudflare preview et liaison Auth
+Les preuves indépendantes de #13 confirment Pages `nutriperso`, production branch `main`, domaines de production, variables frontend présentes par nom, et preview #14 servi au SHA `888e226c7722b309136ac524e5adbd5df5ef40dc`. Le Worker actuellement déployé est `nutri-perso-api`, version `d2c8091e-5f0a-40bb-a711-5384e956d5b5`, déployée le 4 novembre à 20:58 UTC; aucun Worker Lot 1 n’est attesté.
+
+Aucune preuve disponible ne démontre que le routage `/api` de l’aperçu cible un Worker de preview isolé, ni que `VITE_SUPABASE_URL` pointe vers l’Auth du projet visé. Les noms de variables ne prouvent pas leurs valeurs. Condition de sortie : obtenir une configuration preview avec API/Worker isolé et valider l’URL/issuer Auth depuis la configuration sans imprimer les valeurs; vérifier que preview n’atteint ni Worker ni DB de production. Ne pas inférer l’isolation de l’aperçu Pages seul.
+
+### Sauvegarde et restauration vérifiables
+Avant écriture distante, déterminer le forfait et la rétention PITR effectifs du projet via le panneau/API Supabase; exporter séparément le schéma et les données avec `pg_dump --format=custom --no-owner --no-privileges` dans stockage chiffré à accès restreint, hors dépôt. Consigner date, taille, version outil, empreinte et rétention. La sauvegarde n’est « vérifiée » qu’après restauration dans un projet isolé temporaire, contrôle des objets (dont RPC/RLS) et échantillons de cohérence; un export de schéma seul ne sauvegarde pas les données. Les outils connectés n’ont pas fourni ici de preuve du forfait/PITR ni d’une restauration testée. Ne pas lancer/considérer une sauvegarde non restaurée comme précondition satisfaite.
+
+### Décision
+Réussies : identité et état Supabase, versions du ledger, présence des tables/RLS, différentiel RPC, identité Pages/branche/domaines, SHA preview et version Worker déployée.
+Obstacles : preuve exhaustive d’équivalence SQL, isolation effective du proxy preview, association effective Pages→Auth sans accès aux valeurs, forfait/rétention PITR et restauration d’essai.
+Accord utilisateur requis : repair du ledger, application de `20261105183000`, déploiement Worker, merge PR et publication production. Les vérifications préparatoires non mutantes et la restauration sur environnement isolé restent à effectuer avant de demander cet accord.
