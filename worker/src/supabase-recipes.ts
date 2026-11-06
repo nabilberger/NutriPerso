@@ -1,6 +1,6 @@
 /** Server-only persistence for recipe drafts and immutable recipe snapshots. */
 import { createConfirmedRecipeSnapshot, type ConfirmedRecipeSnapshot } from '../../src/domain/nutrition/recipe-snapshot.ts'
-import { calculateRecipe, type FoodNutritionSnapshot, type RecipeAllocation, type RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
+import { setRecipeFinalWeight, setRecipeServings, calculateRecipe, type FoodNutritionSnapshot, type RecipeAllocation, type RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
 import { parseDecimal } from '../../src/domain/nutrition/decimal.ts'
 import type { SupabaseCatalogEnv } from './supabase-catalog.ts'
 
@@ -157,6 +157,8 @@ function assertDraft(value: unknown): asserts value is RecipeDraft {
   }
   for (const key of ['description', 'instructions'] as const) if (value[key] !== undefined && typeof value[key] !== 'string') throw new RecipePersistenceError('INVALID_RECIPE', 'Description ou préparation invalide.')
   if (value.archived !== undefined && typeof value.archived !== 'boolean') throw new RecipePersistenceError('INVALID_RECIPE', 'État de recette invalide.')
+  if (value.servings !== null) setRecipeServings(value as unknown as RecipeDraft, value.servings as string)
+  if (value.finalWeight !== null) setRecipeFinalWeight(value as unknown as RecipeDraft, value.finalWeight as RecipeDraft['finalWeight'])
   const ingredientIds = new Set<string>()
   for (const [position, ingredient] of value.ingredients.entries()) {
     if (!isRecord(ingredient) || typeof ingredient.id !== 'string' || !ingredient.id.trim()

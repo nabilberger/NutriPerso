@@ -423,3 +423,11 @@ test('legacy bare catalogue UUID ingredients retain their identity through confi
   assert.equal(snapshot.ingredients[0]!.food.foodId, foodId)
   assert.equal(snapshot.ingredients[0]!.food.sourceType, 'custom')
 })
+
+test('recipe editor rejects zero/negative portions and final weight before persisting', async () => {
+  const { call, db } = recipeWorker()
+  for (const change of [{ servings: '0' }, { servings: '-1' }, { finalWeight: { amount: '0', unit: 'g', weightNature: 'edible' } }, { finalWeight: { amount: '-1', unit: 'g', weightNature: 'edible' } }]) {
+    assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: { ...editorDraft(), ...change }, expectedRevision: 0 })).status, 400)
+  }
+  assert.equal(db.recipes.size, 0)
+})

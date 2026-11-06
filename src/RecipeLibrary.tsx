@@ -4,7 +4,7 @@ import { createUuidV4 } from './secure-uuid'
 import { loadRecipeFood } from './recipe-foods'
 import IngredientPicker from './IngredientPicker'
 import { formatTotal } from './Journal'
-import { addRecipeIngredient, calculateRecipe, createRecipe, removeRecipeIngredient, updateRecipeIngredientQuantity,
+import { addRecipeIngredient, calculateRecipe, createRecipe, removeRecipeIngredient, setRecipeFinalWeight, updateRecipeIngredientQuantity,
   type FoodNutritionSnapshot, type RecipeDraft } from './domain/nutrition/recipes'
 import type { FoodQuantityInput } from './domain/nutrition/portions'
 import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot'
@@ -56,6 +56,7 @@ export default function RecipeLibrary({ onUse }: { onUse: (snapshot: ConfirmedRe
     try {
       if (!draft.name.trim()) throw new Error('Le nom de la recette est obligatoire.')
       if (!draft.ingredients.length) throw new Error('Ajoutez au moins un ingrédient.')
+      if (draft.finalWeight) setRecipeFinalWeight(draft, draft.finalWeight)
       calculation = calculateRecipe(draft, new Map(Object.entries(foods)))
       perServing = calculateRecipe(draft, new Map(Object.entries(foods)), { kind: 'per-serving' })
     } catch (e) { invalid = e instanceof Error ? e.message : 'Quantité ou portions invalides.' }
@@ -66,6 +67,7 @@ export default function RecipeLibrary({ onUse }: { onUse: (snapshot: ConfirmedRe
     try {
       if (!draft.name.trim()) throw new Error('Le nom de la recette est obligatoire.')
       // Validate all decimal fields even for a draft; incomplete text stays in the editor on failure.
+      if (draft.finalWeight) setRecipeFinalWeight(draft, draft.finalWeight)
       calculateRecipe(draft, new Map(Object.entries(foods)), { kind: 'per-serving' })
       let saved = draft
       if (dirty || !serverRevision) {
