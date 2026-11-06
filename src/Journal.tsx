@@ -19,7 +19,7 @@ import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './dom
 import { requestPrivateJson } from './auth/client'
 import { loadFoodSources } from './journal-sources.ts'
 import './journal.css'
-import { emptyJournalCache, journalCacheKey, persistJournalCacheForKey, readJournalCache, resolveJournalCacheConflict, writeJournalCache, type JournalCacheRecord, type PendingJournalCancel } from './journal-cache.ts'
+import { acknowledgeJournalAction, emptyJournalCache, journalCacheKey, persistJournalCacheForKey, readJournalCache, resolveJournalCacheConflict, writeJournalCache, type JournalCacheRecord, type PendingJournalCancel } from './journal-cache.ts'
 
 type PersistedJournal = { readonly day: JournalDayDraft; readonly snapshots: readonly ConfirmedMealSnapshot[] }
 type JournalCache = JournalCacheRecord
@@ -85,6 +85,8 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
     const inMemory = cacheRefKey.current === requestKey ? cacheRef.current : null
     if (!inMemory) { syncLocks.current.delete(requestKey); setSyncing(syncLocks.current.size > 0); return }
     let working = inMemory
+    const latestForRequest = () => cacheRefKey.current === requestKey ? cacheRef.current
+      : (readJournalCache(localStorage, requestKey) ?? working)
     try {
       if (working.dirty && working.day && (working.day.meals.length > 0 || working.serverRevision > 0)) {
         const sentDay = working.day
@@ -92,12 +94,12 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ expectedRevision: working.serverRevision, draft: { ...sentDay, revision: working.serverRevision + 1 } }),
         })
-        const latest = cacheRefKey.current === requestKey ? cacheRef.current : (readJournalCache(localStorage, requestKey) ?? working)
+        const latest = latestForRequest()
         if (!latest.day || latest.day.revision !== sentDay.revision) {
           working = { ...latest, serverRevision: saved.draft.revision, dirty: true }
           commitForKey(requestKey, working); setMessageForKey(requestKey, 'Une nouvelle modification reste en attente de synchronisation.'); return
         }
-        working = { ...working, day: saved.draft, serverRevision: saved.draft.revision, dirty: false }
+        working = { ...latest, day: saved.draft, serverRevision: saved.draft.revision, dirty: false }
         commitForKey(requestKey, working)
       } else if (working.dirty && !working.day) {
         working = { ...working, dirty: false }; commitForKey(requestKey, working)
@@ -113,9 +115,11 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
               snapshotId: pending.snapshotId, confirmedAt: pending.confirmedAt, engineVersion: pending.engineVersion,
             }) },
           )
-          working = { ...working, day: result.day, serverRevision: result.day.revision,
-            snapshots: replaceSnapshot(working.snapshots, result.snapshot), pendingConfirm: null, dirty: false }
+          working = acknowledgeJournalAction(working, latestForRequest(), result)
           commitForKey(requestKey, working)
+          if (working.dirty) {
+            setMessageForKey(requestKey, 'Une nouvelle modification reste en attente de synchronisation.'); return
+          }
         }
       }
       for (const pending of working.pendingCancels) {
@@ -125,11 +129,11 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
             newSnapshotId: pending.newSnapshotId, confirmedAt: pending.confirmedAt, engineVersion: pending.engineVersion,
           }) },
         )
-        working = { ...working, day: result.day, serverRevision: result.day.revision, dirty: false,
-          snapshots: replaceSnapshot(working.snapshots, result.snapshot),
-          pendingConfirm: working.pendingConfirm?.mealId === result.snapshot.logicalMealId ? null : working.pendingConfirm,
-          pendingCancels: working.pendingCancels.filter((item) => item.newSnapshotId !== pending.newSnapshotId) }
+        working = acknowledgeJournalAction(working, latestForRequest(), result)
         commitForKey(requestKey, working)
+        if (working.dirty) {
+          setMessageForKey(requestKey, 'Une nouvelle modification reste en attente de synchronisation.'); return
+        }
       }
       setMessageForKey(requestKey, working.dirty || working.pendingConfirm || working.pendingCancels.length
         ? 'Modifications conservées sur cet appareil, synchronisation en attente.' : 'Synchronisé avec votre journal.')
@@ -218,7 +222,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
       const timer = window.setTimeout(() => { void sync() }, 700)
       return () => window.clearTimeout(timer)
     }
-  }, [cache, cacheKey, initialized, sync])
+  }, [cache, cacheKey, initialized, sync, syncing])
 
   const state: JournalState = useMemo(() => ({ days: cache.day ? [cache.day] : [], snapshots: cache.snapshots }), [cache.day, cache.snapshots])
   const sources = useMemo(() => new Map(Object.entries(cache.sources)), [cache.sources])
@@ -382,7 +386,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
             <div className="journal-meal-kind"><span className="meal-dot"/><select aria-label="Catégorie du repas" value={meal.kind} onChange={(event) => mutate((current) => updateMealDetails(current, cache.day!.id, meal.id, { kind: event.target.value as MealKind }))}>{Object.entries(mealLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
             <label className="meal-time">Heure<input type="datetime-local" value={instantToInput(meal.occurredAt, date)} onChange={(event) => mutate((current) => updateMealDetails(current, cache.day!.id, meal.id, { occurredAt: inputToInstant(event.target.value) }))}/></label>
             <label className="meal-name">Nom facultatif<input value={meal.label ?? ''} placeholder="Ex. repas en famille" onChange={(event) => mutate((current) => updateMealDetails(current, cache.day!.id, meal.id, { label: event.target.value }))}/></label>
-            <button type="button" className="journal-link danger" onClick={() => removeDraft(meal.id)}>Supprimer le brouillon</button>
+            <button type="button" className="journal-link danger" disabled={syncing && cache.pendingConfirm?.mealId === meal.id} onClick={() => removeDraft(meal.id)}>Supprimer le brouillon</button>
           </div>
           {meal.items.length === 0 ? <p className="journal-empty-meal">Ajoutez un aliment pour calculer les apports de ce repas.</p> :
             <div className="journal-items">{meal.items.map((item) => item.kind === 'food' ? <article className="journal-food" key={item.id}>
@@ -525,10 +529,6 @@ function instantToInput(value: string | null, date: string): string {
 function instantToLabel(value: string | null): string {
   return value ? new Intl.DateTimeFormat('fr-MA', { hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : 'Heure non définie'
 }
-function replaceSnapshot(snapshots: readonly ConfirmedMealSnapshot[], snapshot: ConfirmedMealSnapshot): readonly ConfirmedMealSnapshot[] {
-  return [...snapshots.filter((item) => item.snapshotId !== snapshot.snapshotId), snapshot]
-}
-
 async function compressPhoto(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) throw new TypeError('Image required')
   const bitmap = await createImageBitmap(file)

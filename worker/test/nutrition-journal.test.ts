@@ -24,7 +24,7 @@ import { makeFraction } from '../../src/domain/nutrition/decimal.ts'
 import { createConfirmedRecipeSnapshot } from '../../src/domain/nutrition/recipe-snapshot.ts'
 import { addRecipeIngredient, calculateFoodSnapshot, calculateRecipe, createRecipe, setRecipeFinalWeight, setRecipeServings, type FoodNutritionSnapshot } from '../../src/domain/nutrition/recipes.ts'
 import { usdaDetailToFoodSnapshot } from '../../src/domain/nutrition/usda-food-snapshot.ts'
-import { archiveJournalCache, emptyJournalCache, journalCacheKey, persistJournalCacheForKey, readJournalCache, resolveJournalCacheConflict, writeJournalCache } from '../../src/journal-cache.ts'
+import { acknowledgeJournalAction, archiveJournalCache, emptyJournalCache, journalCacheKey, persistJournalCacheForKey, readJournalCache, resolveJournalCacheConflict, writeJournalCache } from '../../src/journal-cache.ts'
 import { loadFoodSources } from '../../src/journal-sources.ts'
 import { formatDashboardEnergy } from '../../src/dashboard-summary.ts'
 import type { NutrientContribution, NutrientDatum } from '../../src/domain/nutrition/types.ts'
@@ -351,4 +351,98 @@ test('dashboard energy rounds exact kcal to whole units and marks partial totals
     missing: [], exactKnownSubtotal: { numerator: '503', denominator: '2' } }, true), '252*')
   assert.equal(formatDashboardEnergy(undefined, false), '—')
   assert.equal(formatDashboardEnergy({ status: 'unknown', code: 'energy', unit: 'kcal', missing: [] }, true), 'Inconnu')
+})
+
+function pendingConfirmationCache() {
+  const state = withFood(start(), 'meal')
+  const day = state.days[0]!
+  const pendingConfirm = { mealId: 'meal', snapshotId: 'snapshot-1', confirmedAt: '2026-11-04T12:00:00Z', engineVersion: 'v1' }
+  const sent = { ...emptyJournalCache(), day, serverRevision: day.revision, pendingConfirm }
+  const confirmed = confirm(state, 'meal')
+  return { state, sent, result: { day: confirmed.state.days[0]!, snapshot: confirmed.snapshot } }
+}
+
+test('late confirmation keeps a newly created draft dirty and counts only the acknowledged meal', () => {
+  const { state, sent, result } = pendingConfirmationCache()
+  const edited = createMeal(state, 'day', { id: 'new-meal', kind: 'dinner' })
+  const latest = { ...sent, day: edited.days[0]!, dirty: true, photoDataUrl: 'new-photo' }
+  const ack = acknowledgeJournalAction(sent, latest, result)
+  assert.deepEqual(ack.day!.meals.map(m => m.id), ['new-meal'])
+  assert.equal(ack.dirty, true)
+  assert.equal(ack.serverRevision, result.day.revision)
+  assert.ok(ack.day!.revision > ack.serverRevision)
+  assert.equal(ack.pendingConfirm, null)
+  assert.equal(ack.photoDataUrl, 'new-photo')
+  assert.equal(selectActiveMealSnapshots(ack.snapshots).length, 1)
+  assert.equal(calculateJournalDay({ days: [ack.day!], snapshots: ack.snapshots }, 'day').protein?.value, '10.000000')
+})
+
+test('quantity edited during confirmation becomes an independent pending correction without double counting', () => {
+  const { state, sent, result } = pendingConfirmationCache()
+  const edited = setFoodJournalItemQuantity(state, 'day', 'meal', 'item-1',
+    { kind: 'physical', amount: '234', unit: 'g', weightNature: 'edible' })
+  const ack = acknowledgeJournalAction(sent, { ...sent, day: edited.days[0]!, dirty: true }, result)
+  assert.equal(ack.day!.meals[0]!.supersedesSnapshotId, result.snapshot.snapshotId)
+  assert.equal(ack.dirty, true)
+  const nextState = { days: [ack.day!], snapshots: ack.snapshots }
+  assert.equal(calculateJournalDay(nextState, 'day').protein?.value, '10.000000')
+  assert.equal(calculateJournalDayPreview(nextState, 'day', { foods: new Map([['1', food('1')]]) }).protein?.value, '23.400000')
+  const nextConfirmation = confirm(nextState, 'meal', new Map([['1', food('1')]]), 'snapshot-2')
+  assert.equal(selectActiveMealSnapshots(nextConfirmation.state.snapshots).length, 1)
+  assert.equal(calculateJournalDay(nextConfirmation.state, 'day').protein?.value, '23.400000')
+  assert.deepEqual(nextConfirmation.state.snapshots[0], result.snapshot)
+})
+
+test('late cancellation keeps edits and new drafts while the void remains excluded from totals', () => {
+  const { result } = pendingConfirmationCache()
+  const existing = withFood(createMeal({ days: [result.day], snapshots: [result.snapshot] }, 'day', { id: 'other', kind: 'dinner' }), 'other')
+  const cancelled = cancelConfirmedMeal(existing, result.snapshot.snapshotId,
+    { newSnapshotId: 'void-1', confirmedAt: '2026-11-04T13:00:00Z', engineVersion: 'v1' })
+  const pending = { snapshotId: result.snapshot.snapshotId, newSnapshotId: 'void-1', confirmedAt: '2026-11-04T13:00:00Z', engineVersion: 'v1' }
+  const sent = { ...emptyJournalCache(), day: existing.days[0]!, snapshots: cancelled.state.snapshots, pendingCancels: [pending] }
+  const edited = createMeal(setFoodJournalItemQuantity(existing, 'day', 'other', 'item-1',
+    { kind: 'physical', amount: '234', unit: 'g', weightNature: 'edible' }), 'day', { id: 'new', kind: 'snack' })
+  const ack = acknowledgeJournalAction(sent, { ...sent, day: edited.days[0]!, dirty: true },
+    { day: { ...existing.days[0]!, revision: existing.days[0]!.revision + 1 }, snapshot: cancelled.snapshot })
+  assert.equal(ack.day!.meals.length, 2)
+  assert.equal(ack.dirty, true)
+  assert.equal(ack.pendingCancels.length, 0)
+  assert.equal(selectActiveMealSnapshots(ack.snapshots).length, 0)
+  assert.equal(ack.snapshots.length, 2)
+})
+
+test('photo-only changes survive acknowledgment without becoming a remote draft mutation', () => {
+  const { sent, result } = pendingConfirmationCache()
+  const ack = acknowledgeJournalAction(sent, { ...sent, photoDataUrl: 'replacement-photo', sources: { '1': food('1') } }, result)
+  assert.equal(ack.dirty, false)
+  assert.equal(ack.photoDataUrl, 'replacement-photo')
+  assert.equal(ack.sources['1']!.description, 'Food 1')
+  assert.equal(ack.day, result.day)
+})
+
+test('acknowledgment preserves unrelated pending operations and local draft deletions', () => {
+  const { state, sent, result } = pendingConfirmationCache()
+  const extra = createMeal(state, 'day', { id: 'extra', kind: 'dinner' }).days[0]!
+  const pending = { mealId: 'later', snapshotId: 'later-confirm', confirmedAt: '2026-11-04T12:00:00Z', engineVersion: 'v1' }
+  const cancel = { snapshotId: 'other-snapshot', newSnapshotId: 'other-void', confirmedAt: '2026-11-04T12:00:00Z', engineVersion: 'v1' }
+  const ack = acknowledgeJournalAction({ ...sent, day: extra }, { ...sent, pendingConfirm: pending, pendingCancels: [cancel] },
+    { ...result, day: { ...result.day, meals: extra.meals.filter(m => m.id === 'extra') } })
+  assert.equal(ack.day!.meals.length, 0)
+  assert.equal(ack.dirty, true)
+  assert.deepEqual(ack.pendingConfirm, pending)
+  assert.deepEqual(ack.pendingCancels, [cancel])
+})
+
+test('a late action persists its rebased dirty draft under day A and survives a storage reload', () => {
+  const { state, sent, result } = pendingConfirmationCache()
+  const latest = { ...sent, day: createMeal(state, 'day', { id: 'new', kind: 'dinner' }).days[0]!, dirty: true }
+  const ack = acknowledgeJournalAction(sent, latest, result)
+  const records = new Map<string, string>()
+  const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value) } }
+  const keyA = journalCacheKey('user', '2026-11-04'), keyB = journalCacheKey('user', '2026-11-05')
+  writeJournalCache(storage, keyB, emptyJournalCache())
+  assert.equal(persistJournalCacheForKey(storage, keyA, keyB, ack).updateActiveView, false)
+  assert.equal(readJournalCache(storage, keyA)!.day!.meals[0]!.id, 'new')
+  assert.equal(readJournalCache(storage, keyA)!.dirty, true)
+  assert.equal(readJournalCache(storage, keyB)!.day, null)
 })
