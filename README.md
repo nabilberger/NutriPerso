@@ -74,3 +74,13 @@ npm run worker:deploy
 ```
 
 Le build TypeScript vérifie aussi les types du Worker. Les tests couvrent les réponses, unités, erreurs normalisées et l’absence de fuite de clé. Après le premier déploiement, vérifier dans Cloudflare que la route `nutri.brainboost3d.com/api/*` est active et que les quatre variables/secrets Worker sont configurés. Aucun réglage CORS n'est requis pour les appels PWA de même origine.
+
+## Recette automatisée isolée
+
+```sh
+npx playwright install chromium --only-shell
+npm run test:ui:fixtures
+npm run test:integration:migrations
+```
+
+La suite navigateur démarre sa propre instance Vite synthétique sur `127.0.0.1:4180`, couvre ordinateur/mobile et refuse tout appel réseau `/api/`. Le test migrations utilise PostgreSQL jetable sans port exposé; il applique les sept migrations puis vérifie les contrats SQL journal/modèles. Les preuves et limites sont dans [le rapport de recette](docs/RECETTE_UI_AUDIT_20261106.md) et [le plan d’intégration](docs/AUDIT_INTEGRATION_20261106.md).

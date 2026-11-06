@@ -1,5 +1,7 @@
 # NutriPerso — Plan de mise en service
 
+> **Actualisation du 6 novembre 2026 — périmètre #19.** Les preuves distantes ci-dessous sont historiques (5 novembre), pas une nouvelle vérification. Le HEAD officiel #14 est `a7ce76818c108a0d270f2c05ba5bd308e90b01d0`; #19 est `c9b321d1b461e9094277d9ae9a8e4f082c9c8a6e` avant les correctifs d’audit. Le plan d’intégration actuel est [AUDIT_INTEGRATION_20261106.md](./AUDIT_INTEGRATION_20261106.md). Les anciennes mentions de six migrations et d’une seule migration attendue au dry-run ne s’appliquent plus au lot combiné : il contient **sept migrations**, dont `20261105183000_journal_delete_precedence.sql` et `20261106100000_meal_templates.sql` à considérer après comparaison du schéma et autorisation. **Ne pas exécuter les commandes repair/push/publication historiques comme une procédure approuvée.** Aucune opération distante n’est autorisée par cet audit.
+
 État préparatoire au 5 novembre 2026. Ce document prépare les opérations; aucune migration, fusion ou mise en production n’a été effectuée.
 
 ## État vérifié

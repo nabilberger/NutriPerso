@@ -12,6 +12,8 @@ import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot
 import { buildMealReuseDraft, selectCurrentRecipeSnapshot, type MealReuseDTO } from './meal-reuse'
 import { createUuidV4 } from './secure-uuid.ts'
 import { uiFixtureMode } from './ui-fixture-mode'
+import { getFixtureFoodSource } from './dev-ui-fixtures'
+import { requestFoodCatalog } from './catalog-client'
 import { decimalToFraction, fractionToDecimal, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { requestPrivateJson } from './auth/client'
@@ -376,9 +378,9 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
           </div>
           {meal.items.length === 0 ? <p className="journal-empty-meal">Ajoutez un aliment pour calculer les apports de ce repas.</p> :
             <div className="journal-items">{meal.items.map((item) => item.kind === 'food' ? <article className="journal-food" key={item.id}>
-              <div className="journal-food-name"><b>{cache.sources[item.foodId]?.description ?? item.foodId}</b><small>{cache.sources[item.foodId]?.dataType ?? 'Source USDA'}</small></div>
+              <div className="journal-food-name"><b>{item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? item.foodId}</b><small>{item.pinnedFoodSnapshot?.dataType ?? cache.sources[item.foodId]?.dataType ?? 'Source USDA'}</small></div>
               <QuantityInput itemId={item.id} mealId={meal.id} quantity={item.quantity} onChange={(quantity) => mutate((current) => setFoodJournalItemQuantity(current, cache.day!.id, meal.id, item.id, quantity))}/>
-              <button type="button" className="journal-link danger" aria-label={`Retirer ${cache.sources[item.foodId]?.description ?? 'cet aliment'}`} onClick={() => mutate((current) => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer</button>
+              <button type="button" className="journal-link danger" aria-label={`Retirer ${item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? 'cet aliment'}`} onClick={() => mutate((current) => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer</button>
             </article> : <article className="journal-food" key={item.id}><div className="journal-food-name"><b>{item.recipeSnapshot.recipe.name}</b><small>Recette confirmée</small></div><span>{item.quantity.amount} {item.quantity.kind === 'servings' ? 'portion(s)' : 'g'}</span></article>)}</div>}
           <div className="journal-meal-totals"><b>Apports de ce repas</b>{sections.map(({code,label,unit})=><span key={code}>{label} <strong>{formatTotal(calculateMealTotal(state, cache.day?.id, meal.id, sources, code), unit)}</strong></span>)}</div>
           {addingFoodTo === meal.id ? <FoodPicker onCancel={() => setAddingFoodTo(null)} onSelect={(food, quantity) => addSelectedFood(meal.id, food, quantity)}/> :
@@ -444,7 +446,7 @@ function FoodPicker({ onCancel, onSelect }: { readonly onCancel: () => void; rea
     if (query.trim().length < 2) { setError('Saisissez au moins deux caractères.'); return }
     setBusy(true); setError('')
     try {
-      const response = await fetch(`/api/foods/search?q=${encodeURIComponent(query.trim())}&page=${requestedPage}&pageSize=25`, { cache: 'no-store' })
+      const response = await requestFoodCatalog(`/api/foods/search?q=${encodeURIComponent(query.trim())}&page=${requestedPage}&pageSize=25`)
       if (!response.ok) throw new Error('La recherche USDA est indisponible.')
       const data = await response.json() as SearchResult
       setFoods(data.foods); setPage(data.currentPage); setTotalPages(data.totalPages); setDetail(null)
@@ -454,9 +456,10 @@ function FoodPicker({ onCancel, onSelect }: { readonly onCancel: () => void; rea
   async function choose(food: SearchFood) {
     setBusy(true); setError('')
     try {
-      const response = await fetch(`/api/foods/${food.fdcId}`, { cache: 'no-store' })
+      const response = await requestFoodCatalog(`/api/foods/${food.fdcId}`)
       if (!response.ok) throw new Error('La fiche USDA est indisponible.')
-      const snapshot = usdaDetailToFoodSnapshot(await response.json() as FoodDetail)
+      const snapshot = uiFixtureMode ? getFixtureFoodSource(`usda:${food.fdcId}`) : usdaDetailToFoodSnapshot(await response.json() as FoodDetail)
+      if (!snapshot) throw new Error('La fiche synthétique est introuvable.')
       setDetail(snapshot)
       const basis = snapshot.nutrients.find((datum) => datum.status === 'reported')?.basis
       if (basis) { setAmount(basis.amount); setUnit(basis.unit) }
