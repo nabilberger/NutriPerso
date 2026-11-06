@@ -51,3 +51,14 @@
 5. Le chantier Figma #7 suit les mêmes écrans et fournit la base de composants, sans requalifier les besoins.
 
 **Les changements de méthode ne modifient en rien le cahier des charges.**
+
+## Livraison Lot 3 — recettes (branche dédiée depuis 20630e79)
+
+Éditeur de recettes, métadonnées, quantités/unités, portions, poids final facultatif,
+confirmation serveur, bibliothèque, archivage et réutilisation indépendante dans le
+journal : codés, avec tests Worker, PostgreSQL isolé et navigateur ordinateur/mobile.
+Voir `LOT3_RECETTES_CATALOGUE.md` et les résultats de la PR pour le SHA validé et la CI.
+Les ingrédients USDA et ceux du catalogue local/personnel existant sont utilisables.
+L'édition/création de fiches alimentaires et des équivalences alimentaires reste à
+réaliser au titre du §3.3 ; cette livraison ne clôt pas à elle seule #5 ni la V1.
+État de déploiement : aucun nouveau Worker/Pages ni aucune migration distante appliqués.

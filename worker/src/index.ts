@@ -1,11 +1,12 @@
+import { NutritionError } from '../../src/domain/nutrition/types.ts'
 import { Hono } from 'hono'
 import type { Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { importUsdaFood as persistUsdaFood, type SupabaseCatalogEnv, type UsdaFoodDetail } from './supabase-catalog.ts'
+import { searchCatalogFoods, getCatalogNutrition, SupabaseCatalogError, importUsdaFood as persistUsdaFood, type SupabaseCatalogEnv, type UsdaFoodDetail } from './supabase-catalog.ts'
 import { parseJsonWithExactNumbers } from './exact-json.ts'
 import { parseDecimal } from '../../src/domain/nutrition/decimal.ts'
 import { validateSupabaseAccessToken, type AuthenticatedUserScope } from './auth.ts'
-import { getRecipePersistence, listRecipeDrafts, RecipePersistenceError, saveRecipeDraft } from './supabase-recipes.ts'
+import { confirmRecipe, getRecipePersistence, listRecipeDrafts, RecipePersistenceError, saveRecipeDraft } from './supabase-recipes.ts'
 import type { RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
 import { cancelJournalMeal, confirmJournalMeal, getJournalPersistence, getJournalPersistenceForDate, JournalPersistenceError, saveJournalDayDraft } from './supabase-journal.ts'
 import { usdaDetailToFoodSnapshot } from '../../src/domain/nutrition/usda-food-snapshot.ts'
@@ -122,6 +123,49 @@ app.put('/api/private/profile', async (c) => {
 app.get('/api/private/session', (c) => {
   const { userId, email } = c.get('userScope')
   return c.json({ user: { id: userId, email } })
+})
+
+app.get('/api/private/catalog', async (c) => {
+  if ((c.req.query('q') ?? '').trim().length < 2) return c.json({ error: { code: 'INVALID_QUERY', message: 'Saisissez au moins deux caractères.' } }, 400)
+  try { return c.json({ foods: await searchCatalogFoods(c.env, c.req.query('q') ?? '', 50, fetcher) }) }
+  catch (error) { return c.json({ error: { code: 'CATALOG_ERROR', message: error instanceof SupabaseCatalogError ? error.message : 'Catalogue indisponible.' } }, 502) }
+})
+app.get('/api/private/catalog/:foodId', async (c) => {
+  try {
+    const food = await getCatalogNutrition(c.env, c.req.param('foodId'), fetcher)
+    return food ? c.json({ food }) : c.json({ error: { code: 'NOT_FOUND', message: 'Aliment introuvable.' } }, 404)
+  } catch (error) { return c.json({ error: { code: 'CATALOG_ERROR', message: error instanceof Error ? error.message : 'Catalogue indisponible.' } }, 502) }
+})
+app.post('/api/private/recipes/:recipeId/confirm', async (c) => {
+  const body = await readActionBody(c, ['expectedRevision', 'expectedPredecessorSnapshotId'])
+  if (body instanceof Response) return body
+  try {
+    const persisted = await getRecipePersistence(c.env, c.get('userScope'), c.req.param('recipeId'), fetcher)
+    if (!persisted || persisted.draft.archived) return c.json({ error: { code: 'NOT_FOUND', message: 'Recette introuvable.' } }, 404)
+    if (body.expectedRevision !== persisted.draft.revision) throw new RecipePersistenceError('REVISION_CONFLICT', 'La recette a changé. Rechargez-la avant de confirmer.')
+    const previous = persisted.snapshots.at(-1)
+    if (previous?.recipe.revision === persisted.draft.revision) return c.json({ snapshot: previous })
+    if ((previous?.snapshotId ?? null) !== body.expectedPredecessorSnapshotId) throw new RecipePersistenceError('REVISION_CONFLICT', 'Le prédécesseur de cette recette a changé.')
+    if (!persisted.draft.ingredients.length || !persisted.draft.servings) throw new RecipePersistenceError('INVALID_RECIPE', 'Ajoutez des ingrédients et un nombre de portions avant de confirmer.')
+    const foods = new Map<string, import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot>()
+    for (const id of new Set(persisted.draft.ingredients.map(item => item.foodId))) foods.set(id, await resolveFoodSource(c.env, id, fetcher))
+    const snapshot = await confirmRecipe(c.env, c.get('userScope'), persisted.draft, foods, { kind: 'total' },
+      'nutrition-engine-v1', new Date().toISOString(), previous?.snapshotId ?? null, fetcher)
+    return c.json({ snapshot })
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+app.delete('/api/private/recipes/:recipeId', async (c) => {
+  const body = await readActionBody(c, ['expectedRevision'])
+  if (body instanceof Response) return body
+  try {
+    const persisted = await getRecipePersistence(c.env, c.get('userScope'), c.req.param('recipeId'), fetcher)
+    if (!persisted) return c.json({ error: { code: 'NOT_FOUND', message: 'Recette introuvable.' } }, 404)
+    if (!persisted.draft.archived) {
+      if (body.expectedRevision !== persisted.draft.revision) throw new RecipePersistenceError('REVISION_CONFLICT', 'La recette a changé. Rechargez-la avant de supprimer.')
+      await saveRecipeDraft(c.env, c.get('userScope'), { ...persisted.draft, archived: true, revision: persisted.draft.revision + 1 }, persisted.draft.revision, fetcher)
+    }
+    return c.body(null, 204)
+  } catch (error) { return respondPersistenceError(c, error) }
 })
 
 app.get('/api/private/recipes', async (c) => {
@@ -267,6 +311,19 @@ app.onError((_error, c) => c.json({ error: { code: 'INTERNAL_ERROR', message: 'U
 return app
 }
 
+async function resolveFoodSource(env: Bindings, foodId: string, fetcher: typeof fetch): Promise<import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot> {
+  if (foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(foodId)) {
+    const food = await getCatalogNutrition(env, foodId.startsWith('catalog:') ? foodId.slice(8) : foodId, fetcher)
+    if (!food) throw new RecipePersistenceError('INVALID_RECIPE', 'Un ingrédient du catalogue est introuvable.')
+    return { ...food, foodId }
+  }
+  const match = /^usda:(\d+)$/.exec(foodId)
+  if (!match) throw new RecipePersistenceError('INVALID_RECIPE', 'Source d’ingrédient non prise en charge.')
+  const id = Number(match[1]), payload = await requestFdc('/food/' + id, env.FDC_API_KEY, {}, fetcher)
+  if (!isRecord(payload) || finiteNumber(payload.fdcId) !== id) throw new FdcError(502, 'FDC_INVALID_RESPONSE', 'Fiche USDA invalide.')
+  return usdaDetailToFoodSnapshot(mapDetailFood(payload))
+}
+
 async function resolveJournalSources(
   env: Bindings,
   scope: AuthenticatedUserScope,
@@ -292,6 +349,7 @@ async function resolveJournalSources(
         foods.set(item.foodId, historicalItem.foodSnapshot)
         continue
       }
+      if (item.foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(item.foodId)) { foods.set(item.foodId, await resolveFoodSource(env, item.foodId, fetcher)); continue }
       const match = /^usda:(\d+)$/.exec(item.foodId)
       if (!match) throw new JournalPersistenceError('INVALID_JOURNAL', 'La source de cet aliment n’est pas prise en charge.')
       const fdcId = Number(match[1])
@@ -364,6 +422,9 @@ function respondMealTemplateError(c: Context<AppEnv>, error: unknown) {
 }
 
 function respondPersistenceError(c: Context<AppEnv>, error: unknown) {
+  if (error instanceof NutritionError) return c.json({ error: { code: error.code, message: error.message } }, 400)
+  if (error instanceof FdcError) return c.json({ error: { code: error.code, message: error.message } }, error.status as ContentfulStatusCode)
+  if (error instanceof SupabaseCatalogError) return c.json({ error: { code: 'CATALOG_ERROR', message: error.message } }, 502)
   if (error instanceof RecipePersistenceError || error instanceof JournalPersistenceError) {
     const status = error.code === 'INVALID_RECIPE' || error.code === 'INVALID_JOURNAL' ? 400
       : error.code === 'REVISION_CONFLICT' ? 409

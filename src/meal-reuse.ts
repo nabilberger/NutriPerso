@@ -7,7 +7,7 @@ export type MealReuseItem =
   | { readonly kind: 'recipe'; readonly recipeId: string; readonly quantity: RecipeJournalQuantity; readonly sortOrder: number }
 
 export type MealReuseDTO = {
-  readonly sourceKind: 'consumption' | 'template'
+  readonly sourceKind: 'consumption' | 'template' | 'recipe'
   readonly sourceId: string
   readonly label: string | null
   readonly mealKind: MealKind

@@ -1,7 +1,9 @@
+import { catalogNutritionSnapshot } from '../../src/catalog-nutrition.ts'
+import { calculateFoodSnapshot } from '../../src/domain/nutrition/recipes.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  importUsdaFood,
+  getCatalogNutrition, importUsdaFood,
   searchCatalogFoods,
   SupabaseCatalogError,
   type UsdaFoodDetail,
@@ -188,4 +190,35 @@ test('does not expose a public route for privileged arbitrary catalogue imports'
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+const personalEntry = { id: '10000000-0000-4000-8000-000000000005', source_type: 'custom' as const, fdc_id: null, description: 'Farine maison', category: null,
+  data_type: null, brand_owner: null, source_name: 'Étiquette', source_reference: 'Mesure maison', source_notes: null, imported_at: null }
+test('personal catalogue snapshots preserve exact bases, real zero and missing nutrients', () => {
+  const food = catalogNutritionSnapshot(personalEntry, [
+    { nutrient_code: 'name:protein:g', fdc_nutrient_id: null, value: '1', unit: 'G', reference_quantity: '3', reference_unit: 'g', basis_source: 'manual' },
+    { nutrient_code: 'carbohydrate', fdc_nutrient_id: null, value: '0', unit: 'g', reference_quantity: '100', reference_unit: 'g', basis_source: 'manual' },
+    { nutrient_code: 'energy', fdc_nutrient_id: null, value: '44', unit: 'KCAL', reference_quantity: null, reference_unit: null, basis_source: null },
+  ])
+  const calc = calculateFoodSnapshot(food, { kind: 'physical', amount: '1', unit: 'g', weightNature: 'edible' })
+  assert.equal(calc.contributions.protein?.status, 'complete')
+  if(calc.contributions.protein?.status === 'complete') assert.equal(calc.contributions.protein.exactValue.denominator, 3n)
+  assert.equal(calc.contributions.carbohydrate?.status, 'complete')
+  assert.equal(calc.contributions.energy?.status, 'unknown')
+  assert.equal(calc.contributions.fiber?.status, 'unknown')
+  assert.equal(food.sourceType, 'custom')
+})
+test('local catalogue reads validate the requested food identity and keep unknown bases unknown', async () => {
+  const requested: URL[] = []
+  const fetcher: typeof fetch = async input => {
+    const url = new URL(String(input)); requested.push(url)
+    return Response.json(url.pathname.endsWith('/foods') ? [personalEntry] : [])
+  }
+  const food = await getCatalogNutrition(env, personalEntry.id, fetcher)
+  assert.equal(food?.foodId, 'catalog:' + personalEntry.id)
+  assert.equal(food?.nutrients.length, 0)
+  assert.equal(requested[0]!.searchParams.get('id'), 'eq.' + personalEntry.id)
+  assert.equal(requested[1]!.searchParams.get('food_id'), 'eq.' + personalEntry.id)
+  await assert.rejects(getCatalogNutrition(env, 'invalid', fetcher), /Identifiant/)
+  assert.equal(await getCatalogNutrition(env, personalEntry.id, async () => Response.json([])), null)
 })

@@ -1,3 +1,4 @@
+import { catalogNutritionSnapshot } from '../../src/catalog-nutrition.ts'
 /** Server-only access to the Supabase Data API. Do not import this module from frontend code. */
 import { parseDecimal } from '../../src/domain/nutrition/decimal.ts'
 import { parseJsonWithExactNumbers } from './exact-json.ts'
@@ -78,6 +79,19 @@ export async function searchCatalogFoods(
   url.searchParams.set('limit', String(boundedLimit))
   const rows = await requestJson<unknown[]>(url, env, fetcher)
   return rows.map(catalogFoodFromWire)
+}
+
+/** Reads a local/personal entry without importing or replacing any source data. */
+export async function getCatalogNutrition(env: SupabaseCatalogEnv, id: string, fetcher: typeof fetch = fetch) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new SupabaseCatalogError('Identifiant de catalogue invalide.')
+  const url = restUrl(env, 'foods'); url.searchParams.set('select', FOOD_SELECT); url.searchParams.set('id', `eq.${id}`)
+  const foods = await requestJson<unknown[]>(url, env, fetcher)
+  if (!foods.length) return null
+  const food = catalogFoodFromWire(foods[0])
+  if (food.id !== id) throw new SupabaseCatalogError('La fiche reçue ne correspond pas à l’aliment demandé.')
+  const nutrients = restUrl(env, 'food_nutrients'); nutrients.searchParams.set('select', '*'); nutrients.searchParams.set('food_id', `eq.${id}`)
+  const rows = await requestJson<unknown[]>(nutrients, env, fetcher)
+  return catalogNutritionSnapshot(food, rows.map(nutrientRowFromWire))
 }
 
 /** Inserts or refreshes a USDA food using the unique FDC ID as its conflict key. */

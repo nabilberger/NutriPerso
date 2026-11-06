@@ -44,6 +44,9 @@ services:
       - /tests/migrations.integration.sql
       - -f
       - /tests/meal-templates.integration.sql
+      - -f
+      - /tests/recipe-editor.integration.sql
     volumes:
       - ./supabase/tests/local/migrations.integration.sql:/tests/migrations.integration.sql:ro
       - ./supabase/tests/local/meal-templates.integration.sql:/tests/meal-templates.integration.sql:ro
+      - ./supabase/tests/local/recipe-editor.integration.sql:/tests/recipe-editor.integration.sql:ro
