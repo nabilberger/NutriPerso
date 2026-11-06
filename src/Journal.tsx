@@ -1,3 +1,6 @@
+import { expireLocalPhotos } from './photo-retention'
+import PrivatePhotos from './PrivatePhotos'
+import PhotoAnalysis from './PhotoAnalysis'
 import FoodQuantityEditor from './FoodQuantityEditor'
 import { LocalCatalog } from './LocalFoodPicker'
 import { formatTotal } from './nutrition-presentation'
@@ -170,6 +173,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
   useEffect(() => {
     let active = true
     setLoading(true); setInitialized(false); setError('')
+    expireLocalPhotos(localStorage)
     const local = readJournalCache(localStorage, cacheKey) ?? emptyJournalCache()
     cacheRef.current = local; cacheRefKey.current = cacheKey; setCache(local)
     async function load() {
@@ -362,8 +366,10 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
       const photoDataUrl = await compressPhoto(file)
       const latest = cacheRefKey.current === requestKey ? cacheRef.current : readJournalCache(localStorage, requestKey)
       if (!latest) return
+      localStorage.removeItem('nutrip-photo-v1:'+requestKey)
+      localStorage.setItem('nutrip-photo-expiry:'+requestKey,String(Date.now()+30*86400000))
       commitForKey(requestKey, { ...latest, photoDataUrl })
-      setMessageForKey(requestKey, !navigator.onLine && storageErrorRef.current ? 'La photo est uniquement en mémoire : le stockage local a échoué et elle sera perdue à la fermeture.' : 'Photo jointe à la copie locale. Son analyse n’est pas disponible dans ce lot.')
+      setMessageForKey(requestKey, !navigator.onLine && storageErrorRef.current ? 'La photo est uniquement en mémoire : le stockage local a échoué et elle sera perdue à la fermeture.' : 'Photo compressée prête pour une analyse explicite.')
     } catch {
       if (activeCacheKey.current === requestKey) setError('Cette photo n’a pas pu être préparée sur cet appareil.')
     }
@@ -378,7 +384,17 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
     <div className={online ? 'journal-sync' : 'journal-sync offline'} role="status" aria-live="polite"><span aria-hidden="true">{online ? '●' : '◌'}</span>{syncMessage}{syncing && <span className="sync-spinner" aria-label="Synchronisation en cours"/>}</div>
     {error && <p role="alert" className="journal-error">{error}</p>}
     {storageError && <p role="alert" className="journal-error">{online ? 'Le stockage local a échoué. Vérifiez la synchronisation avant de fermer cette page.' : 'Le brouillon n’a pas pu être enregistré sur cet appareil et sera perdu à la fermeture.'}</p>}
-    {cache.photoDataUrl && <div className="journal-photo"><img src={cache.photoDataUrl} alt="Photo jointe localement au journal"/><div><b>Photo jointe sur cet appareil</b><small>Elle n’est pas envoyée ni analysée dans ce lot.</small></div><button type="button" onClick={() => commit({ ...cacheRef.current, photoDataUrl: null })}>Retirer</button></div>}
+    {cache.photoDataUrl && <div className="journal-photo"><img src={cache.photoDataUrl} alt="Photo jointe localement au journal"/><div><b>Photo jointe sur cet appareil</b><small>Elle est envoyée uniquement lorsque vous lancez l’analyse.</small></div><button type="button" onClick={() => commit({ ...cacheRef.current, photoDataUrl: null })}>Retirer</button></div>}
+    <PrivatePhotos key={userId}/>
+    {cache.photoDataUrl && <PhotoAnalysis key={cacheKey+cache.photoDataUrl} photo={cache.photoDataUrl} storageKey={'nutrip-photo-v1:'+cacheKey} onDraft={items=>{
+      let current: JournalState = {days:cacheRef.current.day?[cacheRef.current.day]:[],snapshots:cacheRef.current.snapshots}
+      if(!cacheRef.current.day)current=createJournalDay(current,{id:createUuidV4(),localDate:date,timeZone})
+      const day=current.days[0]!,id=createUuidV4()
+      current=createMeal(current,day.id,{id,kind:'lunch',label:'Depuis une photo',occurredAt:null,sortOrder:day.meals.length})
+      const nextSources={...cacheRef.current.sources}
+      items.forEach(({food,quantity},i)=>{nextSources[food.foodId]=food;current=addFoodJournalItem(current,day.id,id,{id:createUuidV4(),foodId:food.foodId,quantity,sortOrder:i})})
+      commit({...cacheRef.current,day:current.days[0]!,sources:nextSources,dirty:true})
+    }}/>}
     {loading ? <div className="journal-loading" role="status">Chargement de la journée…</div> : <>
       <section className="journal-totals" aria-label="Totaux nutritionnels de la journée">
         <div className="journal-total-intro"><small>TOTAUX DU JOUR</small><b>{cache.day?.meals.length || activeSnapshots.length ? 'Calculés avec les données disponibles' : 'Aucun repas pour cette journée'}</b><span>Les valeurs partielles et inconnues restent signalées.</span></div>
@@ -433,15 +449,15 @@ function RecipeQuantityInput({ quantity, allowWeight, onChange }: { quantity: im
     try { const normalized = e.target.value.replace(',', '.'); if (decimalToFraction(parseDecimal(normalized)).numerator > 0n) onChange({ ...quantity, amount: normalized }) } catch { /* Keep incomplete input until blur. */ }
   }} onBlur={() => setAmount(quantity.amount)}/></label>{allowWeight && <label>Mesure de recette<select value={quantity.kind} onChange={e => onChange(e.target.value === 'servings' ? { kind: 'servings', amount: quantity.amount } : { kind: 'weight', amount: quantity.amount, unit: 'g', weightNature: 'edible' })}><option value="servings">Portions</option><option value="weight">Grammes</option></select></label>}</div>
 }
-export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas', allowCatalog = true }: { allowCatalog?: boolean; addLabel?: string; readonly onCancel: () => void; readonly onSelect: (food: FoodNutritionSnapshot, quantity: FoodQuantityInput) => void }) {
+export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas', allowCatalog = true, initialQuery = '', initialAmount = '100', initialUnit = 'g' }: { initialQuery?: string; initialAmount?: string; initialUnit?: 'g'|'ml'; allowCatalog?: boolean; addLabel?: string; readonly onCancel: () => void; readonly onSelect: (food: FoodNutritionSnapshot, quantity: FoodQuantityInput) => void }) {
   const [source,setSource]=useState('usda')
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery)
   const [foods, setFoods] = useState<readonly SearchFood[]>([])
   const [detail, setDetail] = useState<FoodNutritionSnapshot | null>(null)
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
-  const [amount, setAmount] = useState('100')
-  const [unit, setUnit] = useState<'g' | 'ml'>('g')
+  const [amount, setAmount] = useState(initialAmount)
+  const [unit, setUnit] = useState<'g' | 'ml'>(initialUnit)
   const [nature, setNature] = useState<'edible' | 'gross' | 'unknown'>('edible')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -465,7 +481,8 @@ export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas', 
       if (!snapshot) throw new Error('La fiche synthétique est introuvable.')
       setDetail(snapshot)
       const basis = snapshot.nutrients.find((datum) => datum.status === 'reported')?.basis
-      if (basis) { setAmount(basis.amount); setUnit(basis.unit) }
+      if (initialQuery) { setAmount(initialAmount); setUnit(initialUnit) }
+      else if (basis) { setAmount(basis.amount); setUnit(basis.unit) }
       else { setAmount('100'); setUnit('g') }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Fiche indisponible.') }
     finally { setBusy(false) }
@@ -514,6 +531,7 @@ function instantToLabel(value: string | null): string {
   return value ? new Intl.DateTimeFormat('fr-MA', { hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : 'Heure non définie'
 }
 async function compressPhoto(file: File): Promise<string> {
+  if (file.size > 20_000_000) throw new TypeError('Image too large')
   if (!file.type.startsWith('image/')) throw new TypeError('Image required')
   const bitmap = await createImageBitmap(file)
   const scale = Math.min(1, 1280 / Math.max(bitmap.width, bitmap.height))
@@ -523,6 +541,7 @@ async function compressPhoto(file: File): Promise<string> {
   if (!context) throw new Error('Canvas unavailable')
   context.drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close()
   const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('Compression failed')), 'image/jpeg', 0.78))
+  if (blob.size > 1_000_000) throw new Error('Compressed image too large')
   return await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Read failed'))

@@ -1,0 +1,40 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { parsePhotoProposal, validatePhotoData } from '../../src/photo-analysis.ts'
+import { geminiPhoto } from '../src/gemini-photo.ts'
+import { analyzePhoto, expirePhotos } from '../src/photo-service.ts'
+const proposal={version:1,warning:'Estimation',items:[{name:'Riz',amount:null,unit:'g',source:'USDA',uncertainty:'Portion inconnue'}]}
+test('AI proposals preserve unknown quantities and discard nutrition fields',()=>{const p=parsePhotoProposal({...proposal,calories:1234});assert.equal(p.items[0].amount,null);assert.equal('calories' in p,false)})
+test('AI proposals reject malformed quantities, units and partial output',()=>{for(const patch of [{amount:'-1'},{amount:0},{unit:'cups'},{name:''}])assert.throws(()=>parsePhotoProposal({...proposal,items:[{...proposal.items[0],...patch}]}));assert.throws(()=>parsePhotoProposal({items:[]}))})
+test('photo accepts bounded JPEG only',()=>{assert.equal(validatePhotoData('data:image/jpeg;base64,/9j/AA=='),'/9j/AA==');for(const p of ['data:image/png;base64,AA==','data:image/jpeg;base64,AA==','x'.repeat(1400001)])assert.throws(()=>validatePhotoData(p))})
+test('Gemini is server-only, configurable and cannot supply nutritional authority',async()=>{
+ const ai=geminiPhoto('test-secret','gemini-test',async(url,init)=>{assert.match(String(url),/models\/gemini-test:generateContent$/);assert.equal(new Headers(init?.headers).get('x-goog-api-key'),'test-secret');assert.ok(!String(url).includes('test-secret'));return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:JSON.stringify(proposal)}]}}],usageMetadata:{totalTokenCount:42}})})
+ assert.equal((await ai.analyze('/9j/')).tokens,42)
+})
+test('Gemini normalizes quota, truncation and ambiguous refusal',async()=>{for(const response of [new Response('',{status:429}),Response.json({candidates:[{finishReason:'MAX_TOKENS'}]}),Response.json({candidates:[]})])await assert.rejects(geminiPhoto('k','m',async()=>response).analyze('/9j/'))})
+test('quota reservation precedes storage and provider; unavailable budget prevents charge',async()=>{
+ let called=false
+ const env={GEMINI_API_KEY:'k',GEMINI_MODEL:'m',AI_REQUEST_MAX_DH:'1',SUPABASE_URL:'https://test.invalid',SUPABASE_SECRET_KEY:'x',MEAL_PHOTOS:{put:async()=>{called=true}} as never}
+ await assert.rejects(analyzePhoto(env,'user',{id:'11111111-1111-4111-8111-111111111111',photo:'data:image/jpeg;base64,/9j/AA=='},async()=>new Response('',{status:429}),{analyze:async()=>{called=true;return {proposal:parsePhotoProposal(proposal),tokens:1}}}))
+ assert.equal(called,false)
+})
+test('private storage is user scoped and has 30-day expiry; provider has no journal access',async()=>{
+ const events:string[]=[];let expiry=0
+ const env={GEMINI_API_KEY:'k',GEMINI_MODEL:'m',AI_REQUEST_MAX_DH:'1',SUPABASE_URL:'https://test.invalid',SUPABASE_SECRET_KEY:'x',MEAL_PHOTOS:{put:async(key:string,_:unknown,options:{customMetadata:{expires:string}})=>{assert.match(key,/^user\//);expiry=Number(options.customMetadata.expires);events.push('store')}} as never}
+ const result=await analyzePhoto(env,'user',{id:'11111111-1111-4111-8111-111111111111',photo:'data:image/jpeg;base64,/9j/AA=='},async(url)=>{events.push(String(url).split('/').pop()!);return Response.json(null)},{analyze:async()=>{events.push('provider');return {proposal:parsePhotoProposal(proposal),tokens:1}}})
+ assert.deepEqual(events,['reserve_photo_analysis','store','provider','finish_photo_analysis']);assert.ok(Math.abs(expiry-Date.now()-30*86400000)<1000);assert.equal(result.proposal.items[0].amount,null)
+})
+test('retention deletes expired private objects across pagination only',async()=>{const removed:string[]=[];let n=0;await expirePhotos({MEAL_PHOTOS:{list:async()=>++n===1?{objects:[{key:'old',customMetadata:{expires:'1'}}],truncated:true,cursor:'next'}:{objects:[{key:'new',customMetadata:{expires:String(Date.now()+10000)}}],truncated:false},delete:async(k:string)=>{removed.push(k)}} as never});assert.deepEqual(removed,['old']);assert.equal(n,2)})
+
+test('photo routes require Auth; deletion never trusts frontend user identity',async()=>{
+ const {createWorkerApp}=await import('../src/index.ts')
+ const removed:string[]=[]
+ const env={SUPABASE_URL:'https://test.invalid',SUPABASE_PUBLISHABLE_KEY:'test',MEAL_PHOTOS:{delete:async(key:string)=>{removed.push(key)}} as never}
+ const app=createWorkerApp({fetcher:async()=>Response.json({id:'11111111-1111-4111-8111-111111111111',is_anonymous:false})})
+ assert.equal((await app.request('/api/private/photo-analysis',{method:'POST'},env)).status,401)
+ const r=await app.request('/api/private/photos/22222222-2222-4222-8222-222222222222',{method:'DELETE',headers:{Authorization:'Bearer e30.e30.sig'},body:JSON.stringify({userId:'victim'})},env)
+ assert.equal(r.status,204);assert.deepEqual(removed,['11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222.jpg'])
+})
+test('provider schema errors and timeouts leave no partial proposal',async()=>{
+ for(const fetcher of [async()=>{throw new Error('timeout')},async()=>Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text:'{"version":1,"items":[{}],"warning":""}'}]}}]})])await assert.rejects(geminiPhoto('key','model',fetcher).analyze(''))
+})

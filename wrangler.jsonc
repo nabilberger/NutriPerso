@@ -9,5 +9,16 @@
       "pattern": "nutri.brainboost3d.com/api/*",
       "zone_name": "brainboost3d.com"
     }
-  ]
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEAL_PHOTOS",
+      "bucket_name": "nutriperso-meal-photos"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "15 * * * *"
+    ]
+  }
 }
