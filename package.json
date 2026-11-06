@@ -12,15 +12,18 @@
     "worker:deploy": "wrangler deploy --config wrangler.jsonc",
     "test:integration:db": "docker compose -p nutriperso-int -f docker-compose.integration.yml up --abort-on-container-exit --exit-code-from test",
     "dev:stack": "node scripts/dev-stack.mjs",
-    "dev:fixtures": "node scripts/dev-fixtures.mjs"
+    "dev:fixtures": "node scripts/dev-fixtures.mjs",
+    "test:ui:fixtures": "playwright test",
+    "test:integration:migrations": "docker compose -p nutriperso-migrations-int -f docker-compose.migrations.yml up --abort-on-container-exit --exit-code-from test"
   },
   "dependencies": {
+    "hono": "latest",
     "react": "19.3.1",
-    "react-dom": "19.3.1",
-    "hono": "latest"
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
+    "@playwright/test": "1.65.0",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.2.1",

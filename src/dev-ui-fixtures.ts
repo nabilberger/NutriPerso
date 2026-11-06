@@ -74,6 +74,29 @@ const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').to
 const body=(init:RequestInit)=>JSON.parse(String(init.body??'{}')) as Record<string, any>
 export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise<T>{
   const url=new URL(path,'http://nutrip.local'),method=(init.method??'GET').toUpperCase()
+  if(url.pathname==='/api/foods/search'&&method==='GET'){
+    const q=normalize(url.searchParams.get('q')??'')
+    const foods=[chickpea,couscous].filter(food=>normalize(food.description).includes(q)).map(food=>({
+      fdcId:food.fdcId,description:food.description,dataType:food.dataType,brandOwner:food.brandOwner,foodCategory:'generic',
+    }))
+    return {foods,totalHits:foods.length,currentPage:1,totalPages:foods.length?1:0} as T
+  }
+  const foodPath=/^\/api\/foods\/(\d+)$/.exec(url.pathname)
+  if(foodPath&&method==='GET'){
+    const food=getFixtureFoodSource(`usda:${foodPath[1]}`)
+    if(!food)throw new Error('Mode recette : aliment synthétique introuvable.')
+    const reported=food.nutrients.filter(datum=>datum.status==='reported')
+    const nutrient=(code:string)=>{const datum=reported.find(d=>d.code===code);return datum?{
+      name:datum.code,value:datum.sourceValue,unitName:datum.sourceUnit,
+      basis:datum.basis?{quantity:datum.basis.amount,unit:datum.basis.unit,source:datum.basis.source}:null,
+    }:null}
+    return {fdcId:food.fdcId,description:food.description,dataType:food.dataType,foodCategory:food.category,brandOwner:food.brandOwner,
+      nutrients:reported.map(d=>({id:d.source.nutrientSourceId,name:d.code,unitName:d.sourceUnit,value:d.sourceValue,
+        basis:d.basis?{quantity:d.basis.amount,unit:d.basis.unit,source:d.basis.source}:null})),
+      keyNutrients:{energy:nutrient('energy'),protein:nutrient('protein'),carbohydrates:nutrient('carbohydrate'),fat:nutrient('fat'),fiber:nutrient('fiber')},
+    } as T
+  }
+  if(url.pathname==='/api/private/recipes'&&method==='GET')return {recipes:[recipeDraft]} as T
   if(url.pathname==='/api/private/profile'&&method==='GET')return {profile:null} as T
   if(url.pathname==='/api/private/journal/history'&&method==='GET'){
     const q=url.searchParams.get('q')??'',from=url.searchParams.get('from')??'',to=url.searchParams.get('to')??''

@@ -77,7 +77,7 @@ export default function MealHistory({ onReuse }: { readonly onReuse: (meal: Meal
     {error && <p role="alert" className="data-error">{error}</p>}
     <section className="food-search" aria-label="Rechercher dans l'historique">
       <label>Rechercher un repas ou un aliment<input value={query} onChange={(e) => { setPage((p) => ({ ...p, offset: 0 })); setQuery(e.target.value) }} /></label>
-      <div><label>Depuis<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label><label>Jusqu’au<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label></div>
+      <div><label>Depuis<input type="date" value={from} onChange={(e) => { setPage((p) => ({ ...p, offset: 0 })); setFrom(e.target.value) }} /></label><label>Jusqu’au<input type="date" value={to} onChange={(e) => { setPage((p) => ({ ...p, offset: 0 })); setTo(e.target.value) }} /></label></div>
     </section>
     <section className="data-card"><h2>20 consommations les plus récentes</h2><p className="data-muted">Ce raccourci reste indépendant des filtres de recherche.</p>
       {loading ? <p role="status">Chargement des repas récents…</p> : recentMeals.length ? <div className="history-list">{recentMeals.map((meal) => <article key={meal.snapshotId}>
