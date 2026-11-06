@@ -4,7 +4,7 @@ import {
 } from './domain/nutrition/journal.ts'
 import { createConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
 import { addRecipeIngredient, calculateRecipe, createRecipe, setRecipeServings, type FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
-import type { NutrientDatum } from './domain/nutrition/types.ts'
+import type { NutrientCode, NutrientDatum } from './domain/nutrition/types.ts'
 
 export const fixtureUserId = '00000000-0000-4000-8000-000000000001'
 const recipeId = 'fixture-recipe-bowl'
@@ -18,7 +18,7 @@ type SyntheticNutrients = {
 function food(fdcId: number, description: string, values: SyntheticNutrients): FoodNutritionSnapshot {
   const foodId = `usda:${fdcId}`
   const source = { sourceType: 'usda' as const, sourceName: 'NutriPerso UI fixture', sourceReference: `fixture:${fdcId}`, nutrientSourceId: 1003 }
-  const datum = (code: NutrientDatum extends infer _ ? 'energy' | 'protein' | 'carbohydrate' | 'fat' | 'fiber' : never,
+  const datum = (code: NutrientCode,
     sourceValue: string, sourceUnit: 'kcal' | 'g', nutrientSourceId: number): NutrientDatum =>
     ({ status: 'reported', code, sourceValue, sourceUnit, basis: { amount: '100', unit: 'g', source: 'manual' },
       source: { ...source, nutrientSourceId } })
