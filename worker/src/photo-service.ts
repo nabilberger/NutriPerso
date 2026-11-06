@@ -5,7 +5,10 @@ export async function photoRpc(env: PhotoEnv, name: string, body: unknown, fetch
   if (!env.SUPABASE_URL || !env.SUPABASE_SECRET_KEY) throw new Error('Configuration IA indisponible.')
   const r = await fetcher(env.SUPABASE_URL.replace(/\/$/,'')+'/rest/v1/rpc/'+name, { method:'POST', signal:AbortSignal.timeout(10000), headers:{apikey:env.SUPABASE_SECRET_KEY,Authorization:'Bearer '+env.SUPABASE_SECRET_KEY,'Content-Type':'application/json'},body:JSON.stringify(body) })
   if (!r.ok) throw new Error('Budget IA indisponible ou limite atteinte. La saisie manuelle reste disponible.')
-  return r.json()
+  // PostgREST void RPCs can succeed with no representation. Preserve JSON decoding for data RPCs.
+  if (r.status === 204) return undefined
+  const text = await r.text()
+  return text.trim() === '' ? undefined : JSON.parse(text)
 }
 export async function analyzePhoto(env: PhotoEnv, user: string, input: unknown, fetcher: typeof fetch, provider?: PhotoAI) {
   if (!env.MEAL_PHOTOS || !env.GEMINI_API_KEY || !env.GEMINI_MODEL || !/^[a-zA-Z0-9.-]+$/.test(env.GEMINI_MODEL)) throw new Error('Analyse photo non configurée.')
