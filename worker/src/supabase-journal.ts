@@ -83,12 +83,16 @@ export async function cancelJournalMeal(
   snapshotId: string,
   input: { readonly newSnapshotId: string; readonly confirmedAt: string; readonly engineVersion: string },
   fetcher: typeof fetch = fetch,
-): Promise<ConfirmedMealSnapshot> {
+): Promise<{ readonly day: JournalDayDraft; readonly snapshot: ConfirmedMealSnapshot }> {
   assertUserId(scope.userId)
   const snapshots = await readSnapshotHistory(env, scope, fetcher)
   const retry = snapshots.find((snapshot) => snapshot.snapshotId === input.newSnapshotId)
   if (retry) {
-    if (retry.status === 'void' && retry.supersedesSnapshotId === snapshotId) return retry
+    if (retry.status === 'void' && retry.supersedesSnapshotId === snapshotId) {
+      const persisted = await getJournalPersistence(env, scope, retry.dayId, fetcher)
+      if (!persisted) throw new JournalPersistenceError('INVALID_JOURNAL', 'Journée du repas introuvable.')
+      return { day: persisted.day, snapshot: retry }
+    }
     throw new JournalPersistenceError('REVISION_CONFLICT', 'Cet identifiant d’opération est déjà utilisé par un autre snapshot.')
   }
   const target = snapshots.find((snapshot) => snapshot.snapshotId === snapshotId)
@@ -99,8 +103,9 @@ export async function cancelJournalMeal(
   const result = cancelConfirmedMeal(state, snapshotId, input)
   const day = state.days.find((candidate) => candidate.id === result.snapshot.dayId)
   if (!day) throw new JournalPersistenceError('INVALID_JOURNAL', 'Journée du repas introuvable.')
-  await appendSnapshot(env, scope, day, day, result.snapshot, fetcher)
-  return result.snapshot
+  const nextDay: JournalDayDraft = { ...day, revision: day.revision + 1, meals: day.meals.filter((meal) => meal.id !== target.logicalMealId) }
+  await appendSnapshot(env, scope, day, nextDay, result.snapshot, fetcher)
+  return { day: nextDay, snapshot: result.snapshot }
 }
 
 /** Loads stored drafts and snapshots verbatim; no current catalogue data is consulted. */
@@ -120,6 +125,32 @@ export async function getJournalPersistence(
   const day = parseDay(rows[0].draft)
   const snapshots = await readSnapshotHistory(env, scope, fetcher)
   return { day, snapshots }
+}
+
+/** Loads the unique user's journal day for an ISO civil date. */
+export async function getJournalPersistenceForDate(
+  env: JournalPersistenceEnv, scope: JournalUserScope, localDate: string, fetcher: typeof fetch = fetch,
+): Promise<PersistedJournal | null> {
+  assertUserId(scope.userId)
+  let validDate = false
+  if (/^\d{4}-\d{2}-\d{2}$/.test(localDate)) {
+    try { validDate = new Date(localDate + 'T00:00:00Z').toISOString().slice(0, 10) === localDate } catch { validDate = false }
+  }
+  if (!validDate) throw new JournalPersistenceError('INVALID_JOURNAL', 'La date doit être une date ISO valide.')
+  const url = restUrl(env, 'journal_days')
+  url.searchParams.set('select', 'id,user_id')
+  url.searchParams.set('local_date', `eq.${localDate}`)
+  url.searchParams.set('user_id', `eq.${scope.userId}`)
+  url.searchParams.set('limit', '2')
+  const rows = await requestJson<unknown[]>(url, env, fetcher)
+  if (!Array.isArray(rows)) throw new JournalPersistenceError('REMOTE_ERROR', 'La réponse de journée Supabase est invalide.')
+  if (rows.length > 1) throw new JournalPersistenceError('REMOTE_ERROR', 'Plusieurs brouillons existent pour la même journée.')
+  const row = rows[0]
+  if (!row) return null
+  if (!isRecord(row) || row.user_id !== scope.userId || typeof row.id !== 'string') {
+    throw new JournalPersistenceError('REMOTE_ERROR', 'Supabase a retourné une journée invalide.')
+  }
+  return getJournalPersistence(env, scope, row.id, fetcher)
 }
 
 /** Selects the active confirmed heads; void and superseded versions remain historical only. */

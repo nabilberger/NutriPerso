@@ -8,16 +8,24 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "worker:dev": "wrangler dev --config wrangler.jsonc",
-    "test": "tsx --test worker/test/usda.test.ts worker/test/supabase-catalog.test.ts worker/test/supabase-recipes.test.ts worker/test/supabase-journal.test.ts worker/test/exact-json.test.ts worker/test/nutrition-domain.test.ts worker/test/nutrition-recipes.test.ts worker/test/nutrition-journal.test.ts worker/test/auth-client.test.ts worker/test/auth-worker.test.ts",
-    "worker:deploy": "wrangler deploy --config wrangler.jsonc"
+    "test": "tsx --test worker/test/usda.test.ts worker/test/supabase-catalog.test.ts worker/test/supabase-recipes.test.ts worker/test/supabase-journal.test.ts worker/test/exact-json.test.ts worker/test/nutrition-domain.test.ts worker/test/nutrition-recipes.test.ts worker/test/nutrition-journal.test.ts worker/test/auth-client.test.ts worker/test/auth-worker.test.ts worker/test/supabase-profile.test.ts worker/test/supabase-measurements.test.ts worker/test/account-menu.test.ts worker/test/meal-template.test.ts worker/test/meal-history.test.ts worker/test/meal-reuse.test.ts worker/test/ui-fixtures.test.ts worker/test/personal-food.test.ts",
+    "worker:deploy": "wrangler deploy --config wrangler.jsonc",
+    "test:integration:db": "docker compose -p nutriperso-int -f docker-compose.integration.yml up --abort-on-container-exit --exit-code-from test",
+    "dev:stack": "node scripts/dev-stack.mjs",
+    "dev:fixtures": "node scripts/dev-fixtures.mjs",
+    "test:ui:fixtures": "playwright test",
+    "test:integration:migrations": "docker compose -p nutriperso-migrations-int -f docker-compose.migrations.yml up --abort-on-container-exit --exit-code-from test",
+    "test:types:ui": "tsc --noEmit -p tsconfig.ui-tests.json"
   },
   "dependencies": {
+    "hono": "latest",
     "react": "19.3.1",
-    "react-dom": "19.3.1",
-    "hono": "latest"
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
+    "@playwright/test": "1.65.0",
+    "@types/node": "22.20.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.2.1",

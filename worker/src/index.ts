@@ -1,14 +1,23 @@
+import { listPersonalFoods, getPersonalFood, savePersonalFood, archivePersonalFood, PersonalFoodError } from './personal-foods.ts'
+import { withFoodIdentity } from '../../src/personal-food.ts'
+import { NutritionError } from '../../src/domain/nutrition/types.ts'
 import { Hono } from 'hono'
 import type { Context } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { importUsdaFood as persistUsdaFood, type SupabaseCatalogEnv, type UsdaFoodDetail } from './supabase-catalog.ts'
+import { searchCatalogFoods, getCatalogNutrition, SupabaseCatalogError, importUsdaFood as persistUsdaFood, type SupabaseCatalogEnv, type UsdaFoodDetail } from './supabase-catalog.ts'
 import { parseJsonWithExactNumbers } from './exact-json.ts'
 import { parseDecimal } from '../../src/domain/nutrition/decimal.ts'
 import { validateSupabaseAccessToken, type AuthenticatedUserScope } from './auth.ts'
-import { getRecipePersistence, listRecipeDrafts, RecipePersistenceError, saveRecipeDraft } from './supabase-recipes.ts'
+import { confirmRecipe, getRecipePersistence, listRecipeDrafts, RecipePersistenceError, saveRecipeDraft } from './supabase-recipes.ts'
 import type { RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
-import { getJournalPersistence, JournalPersistenceError, saveJournalDayDraft } from './supabase-journal.ts'
-import type { JournalDayDraft } from '../../src/domain/nutrition/journal.ts'
+import { cancelJournalMeal, confirmJournalMeal, getJournalPersistence, getJournalPersistenceForDate, JournalPersistenceError, saveJournalDayDraft } from './supabase-journal.ts'
+import { usdaDetailToFoodSnapshot } from '../../src/domain/nutrition/usda-food-snapshot.ts'
+import type { ConfirmedFoodJournalItem, JournalDayDraft } from '../../src/domain/nutrition/journal.ts'
+import { getProfile, saveProfile, ProfileError } from './supabase-profile.ts'
+import {listMeasurements, addMeasurement, deleteMeasurement} from './supabase-measurements.ts'
+import { getActiveJournalSnapshots } from './supabase-journal.ts'
+import { deleteMealTemplate, listMealTemplates, MealTemplateError, saveMealTemplate } from './supabase-meal-templates.ts'
+import { filterMealHistory, paginateMealHistory } from './meal-history.ts'
 
 type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv
 type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
@@ -83,9 +92,102 @@ app.get('/api/foods/:fdcId', async (c) => {
   } catch (error) { return respondWithError(c, error) }
 })
 
+app.get('/api/private/measurements', async (c) => {
+  try {return c.json({measurements:await listMeasurements(c.env,c.get('userScope').userId,fetcher)})}
+  catch(error){return respondProfileError(c,error)}
+})
+app.post('/api/private/measurements', async (c) => {
+  let input:unknown
+  try {input=await c.req.json()} catch{return c.json({error:{code:'INVALID_MEASUREMENT',message:'Une mesure JSON est attendue.'}},400)}
+  if (containsUserId(input)) return c.json({error:{code:'AUTH_FORBIDDEN',message:'L’identité utilisateur provient exclusivement de la session Auth.'}},403)
+  try {return c.json({measurement:await addMeasurement(c.env,c.get('userScope').userId,input,fetcher)},201)}
+  catch(error){return respondProfileError(c,error)}
+})
+app.delete('/api/private/measurements/:id', async (c) => {
+  try {await deleteMeasurement(c.env,c.get('userScope').userId,c.req.param('id'),fetcher);return c.body(null,204)}
+  catch(error){return respondProfileError(c,error)}
+})
+
+app.get('/api/private/profile', async (c) => {
+  try { return c.json({ profile: await getProfile(c.env, c.get('userScope').userId, fetcher) }) }
+  catch (error) { return respondProfileError(c, error) }
+})
+
+app.put('/api/private/profile', async (c) => {
+  let payload: unknown
+  try { payload = await c.req.json() }
+  catch { return c.json({ error: { code: 'INVALID_PROFILE', message: 'Le profil doit être un objet JSON.' } }, 400) }
+  if (containsUserId(payload)) return c.json({ error: { code: 'AUTH_FORBIDDEN', message: 'L’identité utilisateur provient exclusivement de la session Auth.' } }, 403)
+  try { return c.json({ profile: await saveProfile(c.env, c.get('userScope').userId, payload, fetcher) }) }
+  catch (error) { return respondProfileError(c, error) }
+})
+
 app.get('/api/private/session', (c) => {
   const { userId, email } = c.get('userScope')
   return c.json({ user: { id: userId, email } })
+})
+
+app.get('/api/private/personal-foods', async (c) => {
+  try { return c.json({ foods: await listPersonalFoods(c.env,c.get('userScope').userId,fetcher) }) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+app.get('/api/private/personal-foods/:id', async (c) => {
+  try { const food=await getPersonalFood(c.env,c.get('userScope').userId,c.req.param('id'),fetcher); return food ? c.json({document:food}) : c.json({error:{code:'NOT_FOUND',message:'Fiche introuvable.'}},404) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+app.put('/api/private/personal-foods/:id', async (c) => {
+  const body=await readActionBody(c,['document','expectedRevision']); if(body instanceof Response)return body
+  if(!isRecord(body.document)||body.document.id!==c.req.param('id'))return c.json({error:{code:'INVALID_FOOD',message:'Identifiant de fiche invalide.'}},400)
+  try { return c.json({document:await savePersonalFood(c.env,c.get('userScope').userId,body.document,body.expectedRevision as number,fetcher)}) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+app.delete('/api/private/personal-foods/:id', async (c) => {
+  const body=await readActionBody(c,['expectedRevision']); if(body instanceof Response)return body
+  try { await archivePersonalFood(c.env,c.get('userScope').userId,c.req.param('id'),body.expectedRevision as number,fetcher);return c.body(null,204) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+
+app.get('/api/private/catalog', async (c) => {
+  if ((c.req.query('q') ?? '').trim().length < 2) return c.json({ error: { code: 'INVALID_QUERY', message: 'Saisissez au moins deux caractères.' } }, 400)
+  try { return c.json({ foods: await searchCatalogFoods(c.env, c.req.query('q') ?? '', 50, fetcher, c.get('userScope').userId) }) }
+  catch (error) { return c.json({ error: { code: 'CATALOG_ERROR', message: error instanceof SupabaseCatalogError ? error.message : 'Catalogue indisponible.' } }, 502) }
+})
+app.get('/api/private/catalog/:foodId', async (c) => {
+  try {
+    const food = await getCatalogNutrition(c.env, c.req.param('foodId'), fetcher, c.get('userScope').userId)
+    return food ? c.json({ food }) : c.json({ error: { code: 'NOT_FOUND', message: 'Aliment introuvable.' } }, 404)
+  } catch (error) { return c.json({ error: { code: 'CATALOG_ERROR', message: error instanceof Error ? error.message : 'Catalogue indisponible.' } }, 502) }
+})
+app.post('/api/private/recipes/:recipeId/confirm', async (c) => {
+  const body = await readActionBody(c, ['expectedRevision', 'expectedPredecessorSnapshotId'])
+  if (body instanceof Response) return body
+  try {
+    const persisted = await getRecipePersistence(c.env, c.get('userScope'), c.req.param('recipeId'), fetcher)
+    if (!persisted || persisted.draft.archived) return c.json({ error: { code: 'NOT_FOUND', message: 'Recette introuvable.' } }, 404)
+    if (body.expectedRevision !== persisted.draft.revision) throw new RecipePersistenceError('REVISION_CONFLICT', 'La recette a changé. Rechargez-la avant de confirmer.')
+    const previous = persisted.snapshots.at(-1)
+    if (previous?.recipe.revision === persisted.draft.revision) return c.json({ snapshot: previous })
+    if ((previous?.snapshotId ?? null) !== body.expectedPredecessorSnapshotId) throw new RecipePersistenceError('REVISION_CONFLICT', 'Le prédécesseur de cette recette a changé.')
+    if (!persisted.draft.ingredients.length || !persisted.draft.servings) throw new RecipePersistenceError('INVALID_RECIPE', 'Ajoutez des ingrédients et un nombre de portions avant de confirmer.')
+    const foods = new Map<string, import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot>()
+    for (const id of new Set(persisted.draft.ingredients.map(item => item.foodId))) foods.set(id, await resolveFoodSource(c.env, id, fetcher, c.get('userScope').userId))
+    const snapshot = await confirmRecipe(c.env, c.get('userScope'), persisted.draft, foods, { kind: 'total' },
+      'nutrition-engine-v1', new Date().toISOString(), previous?.snapshotId ?? null, fetcher)
+    return c.json({ snapshot })
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+app.delete('/api/private/recipes/:recipeId', async (c) => {
+  const body = await readActionBody(c, ['expectedRevision'])
+  if (body instanceof Response) return body
+  try {
+    const persisted = await getRecipePersistence(c.env, c.get('userScope'), c.req.param('recipeId'), fetcher)
+    if (!persisted) return c.json({ error: { code: 'NOT_FOUND', message: 'Recette introuvable.' } }, 404)
+    if (!persisted.draft.archived) {
+      if (body.expectedRevision !== persisted.draft.revision) throw new RecipePersistenceError('REVISION_CONFLICT', 'La recette a changé. Rechargez-la avant de supprimer.')
+      await saveRecipeDraft(c.env, c.get('userScope'), { ...persisted.draft, archived: true, revision: persisted.draft.revision + 1 }, persisted.draft.revision, fetcher)
+    }
+    return c.body(null, 204)
+  } catch (error) { return respondPersistenceError(c, error) }
 })
 
 app.get('/api/private/recipes', async (c) => {
@@ -115,6 +217,48 @@ app.put('/api/private/recipes/:recipeId/draft', async (c) => {
   } catch (error) { return respondPersistenceError(c, error) }
 })
 
+app.get('/api/private/journal/history', async (c) => {
+  try {
+    const limit = Math.min(100, Math.max(1, Number.parseInt(c.req.query('limit') ?? '20', 10) || 20))
+    const offset = Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0)
+    const query = (c.req.query('q') ?? '').trim().toLocaleLowerCase()
+    const from = c.req.query('from') ?? ''
+    const to = c.req.query('to') ?? ''
+    if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to))) {
+      return c.json({ error: { code: 'INVALID_FILTER', message: 'Les dates de filtre sont invalides.' } }, 400)
+    }
+    const active = filterMealHistory(await getActiveJournalSnapshots(c.env, c.get('userScope'), fetcher), { query, from, to })
+    return c.json(paginateMealHistory(active, offset, limit))
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
+app.get('/api/private/meal-templates', async (c) => {
+  try { return c.json({ templates: await listMealTemplates(c.env, c.get('userScope'), fetcher) }) }
+  catch (error) { return respondMealTemplateError(c, error) }
+})
+app.put('/api/private/meal-templates/:templateId', async (c) => {
+  const body = await readActionBody(c, ['template', 'expectedRevision'])
+  if (body instanceof Response) return body
+  if (!isRecord(body.template) || body.template.id !== c.req.param('templateId')) return c.json({ error: { code: 'INVALID_TEMPLATE', message: 'L’identifiant du modèle ne correspond pas à la route.' } }, 400)
+  try {
+    const template = await saveMealTemplate(c.env, c.get('userScope'), body.template,
+      body.expectedRevision === null || Number.isSafeInteger(body.expectedRevision) ? body.expectedRevision as number | null : Number.NaN, fetcher)
+    return c.json({ template })
+  } catch (error) { return respondMealTemplateError(c, error) }
+})
+app.delete('/api/private/meal-templates/:templateId', async (c) => {
+  try { await deleteMealTemplate(c.env, c.get('userScope'), c.req.param('templateId'), fetcher); return c.body(null, 204) }
+  catch (error) { return respondMealTemplateError(c, error) }
+})
+
+app.get('/api/private/journal', async (c) => {
+  const date = c.req.query('date')?.trim() ?? ''
+  if (!date) return c.json({ error: { code: 'DATE_REQUIRED', message: 'Le paramètre date est requis.' } }, 400)
+  try {
+    return c.json({ journal: await getJournalPersistenceForDate(c.env, c.get('userScope'), date, fetcher) })
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
 app.get('/api/private/journal/:dayId', async (c) => {
   try {
     const journal = await getJournalPersistence(c.env, c.get('userScope'), c.req.param('dayId'), fetcher)
@@ -134,9 +278,142 @@ app.put('/api/private/journal/:dayId/draft', async (c) => {
   } catch (error) { return respondPersistenceError(c, error) }
 })
 
+app.post('/api/private/journal/:dayId/meals/:mealId/confirm', async (c) => {
+  const body = await readActionBody(c, ['snapshotId', 'confirmedAt', 'engineVersion'])
+  if (body instanceof Response) return body
+  if (typeof body.snapshotId !== 'string' || !body.snapshotId.trim()
+    || typeof body.confirmedAt !== 'string' || !Number.isFinite(Date.parse(body.confirmedAt))
+    || typeof body.engineVersion !== 'string' || !body.engineVersion.trim()) {
+    return c.json({ error: { code: 'INVALID_JOURNAL', message: 'Les informations de confirmation sont invalides.' } }, 400)
+  }
+  const dayId = c.req.param('dayId')
+  const mealId = c.req.param('mealId')
+  try {
+    const persisted = await getJournalPersistence(c.env, c.get('userScope'), dayId, fetcher)
+    if (!persisted) return c.json({ error: { code: 'NOT_FOUND', message: 'Journée introuvable.' } }, 404)
+    const retry = persisted.snapshots.find((snapshot) => snapshot.snapshotId === body.snapshotId)
+    if (retry) {
+      if (retry.logicalMealId !== mealId || retry.dayId !== dayId || retry.status !== 'confirmed') {
+        return c.json({ error: { code: 'REVISION_CONFLICT', message: 'Cet identifiant de confirmation est déjà utilisé.' } }, 409)
+      }
+      return c.json({ day: persisted.day, snapshot: retry })
+    }
+    const meal = persisted.day.meals.find((candidate) => candidate.id === mealId)
+    if (!meal) return c.json({ error: { code: 'REVISION_CONFLICT', message: 'Le brouillon de repas a changé ou a déjà été confirmé.' } }, 409)
+    const sources = await resolveJournalSources(c.env, c.get('userScope'), persisted, meal, fetcher)
+    const result = await confirmJournalMeal(c.env, c.get('userScope'), dayId, mealId, sources, {
+      snapshotId: body.snapshotId, confirmedAt: body.confirmedAt, engineVersion: body.engineVersion,
+    }, fetcher)
+    return c.json(result)
+  } catch (error) {
+    if (error instanceof FdcError) return respondWithError(c, error)
+    if (error instanceof RecipePersistenceError) return respondPersistenceError(c, error)
+    return respondPersistenceError(c, error)
+  }
+})
+
+app.post('/api/private/journal/snapshots/:snapshotId/cancel', async (c) => {
+  const body = await readActionBody(c, ['newSnapshotId', 'confirmedAt', 'engineVersion'])
+  if (body instanceof Response) return body
+  if (typeof body.newSnapshotId !== 'string' || !body.newSnapshotId.trim()
+    || typeof body.confirmedAt !== 'string' || !Number.isFinite(Date.parse(body.confirmedAt))
+    || typeof body.engineVersion !== 'string' || !body.engineVersion.trim()) {
+    return c.json({ error: { code: 'INVALID_JOURNAL', message: 'Les informations d’annulation sont invalides.' } }, 400)
+  }
+  try {
+    const result = await cancelJournalMeal(c.env, c.get('userScope'), c.req.param('snapshotId'), {
+      newSnapshotId: body.newSnapshotId, confirmedAt: body.confirmedAt, engineVersion: body.engineVersion,
+    }, fetcher)
+    return c.json(result)
+  } catch (error) { return respondPersistenceError(c, error) }
+})
+
 app.notFound((c) => c.json({ error: { code: 'NOT_FOUND', message: 'Route introuvable.' } }, 404))
 app.onError((_error, c) => c.json({ error: { code: 'INTERNAL_ERROR', message: 'Une erreur interne est survenue.' } }, 500))
 return app
+}
+
+async function resolveFoodSource(env: Bindings, foodId: string, fetcher: typeof fetch, userId: string): Promise<import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot> {
+  if (foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(foodId)) {
+    const food = await getCatalogNutrition(env, foodId.startsWith('catalog:') ? foodId.slice(8) : foodId, fetcher, userId)
+    if (!food) throw new RecipePersistenceError('INVALID_RECIPE', 'Un ingrédient du catalogue est introuvable.')
+    return withFoodIdentity(food, foodId)
+  }
+  const match = /^usda:(\d+)$/.exec(foodId)
+  if (!match) throw new RecipePersistenceError('INVALID_RECIPE', 'Source d’ingrédient non prise en charge.')
+  const id = Number(match[1]), payload = await requestFdc('/food/' + id, env.FDC_API_KEY, {}, fetcher)
+  if (!isRecord(payload) || finiteNumber(payload.fdcId) !== id) throw new FdcError(502, 'FDC_INVALID_RESPONSE', 'Fiche USDA invalide.')
+  return usdaDetailToFoodSnapshot(mapDetailFood(payload))
+}
+
+async function resolveJournalSources(
+  env: Bindings,
+  scope: AuthenticatedUserScope,
+  persisted: Awaited<ReturnType<typeof getJournalPersistence>> & {},
+  meal: import('../../src/domain/nutrition/journal.ts').MealDraft,
+  fetcher: typeof fetch,
+): Promise<import('../../src/domain/nutrition/journal.ts').JournalCalculationSources> {
+  if (!persisted) throw new JournalPersistenceError('INVALID_JOURNAL', 'Brouillon de journée introuvable.')
+  const foods = new Map<string, import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot>()
+  const predecessor = meal.supersedesSnapshotId
+    ? persisted.snapshots.find((snapshot) => snapshot.snapshotId === meal.supersedesSnapshotId)
+    : undefined
+  for (const item of meal.items) {
+    if (item.kind === 'food') {
+      if (item.pinnedFoodSnapshot) {
+        const historicalItem = predecessor?.status === 'confirmed'
+          ? predecessor.items.find((candidate): candidate is ConfirmedFoodJournalItem => candidate.kind === 'food' && candidate.id === item.id)
+          : undefined
+        if (!historicalItem || !jsonEqual(historicalItem.foodSnapshot, item.pinnedFoodSnapshot)
+          || historicalItem.foodId !== item.foodId) {
+          throw new JournalPersistenceError('INVALID_JOURNAL', 'Le snapshot alimentaire du brouillon de correction ne correspond pas à son prédécesseur.')
+        }
+        foods.set(item.foodId, historicalItem.foodSnapshot)
+        continue
+      }
+      if (item.foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(item.foodId)) { foods.set(item.foodId, await resolveFoodSource(env, item.foodId, fetcher, scope.userId)); continue }
+      const match = /^usda:(\d+)$/.exec(item.foodId)
+      if (!match) throw new JournalPersistenceError('INVALID_JOURNAL', 'La source de cet aliment n’est pas prise en charge.')
+      const fdcId = Number(match[1])
+      const payload = await requestFdc('/food/' + fdcId, env.FDC_API_KEY, {}, fetcher)
+      if (!isRecord(payload) || finiteNumber(payload.fdcId) !== fdcId) {
+        throw new FdcError(502, 'FDC_INVALID_RESPONSE', 'FoodData Central a retourné une fiche détaillée invalide.')
+      }
+      const snapshot = usdaDetailToFoodSnapshot(mapDetailFood(payload))
+      foods.set(item.foodId, snapshot)
+    } else {
+      const storedRecipe = await getRecipePersistence(env, scope, item.recipeSnapshot.recipe.id, fetcher)
+      const attestedSnapshot = storedRecipe?.snapshots.find((snapshot) => snapshot.snapshotId === item.recipeSnapshot.snapshotId)
+      if (!attestedSnapshot || !jsonEqual(attestedSnapshot, item.recipeSnapshot)) {
+        throw new JournalPersistenceError('INVALID_JOURNAL', 'Le snapshot de recette ne correspond pas à une recette confirmée de cet utilisateur.')
+      }
+    }
+  }
+  return { foods }
+}
+
+async function readActionBody(c: Context<AppEnv>, allowedKeys: readonly string[]): Promise<JsonRecord | Response> {
+  let value: unknown
+  try { value = await c.req.json() } catch { return c.json({ error: { code: 'INVALID_BODY', message: 'Le corps JSON est invalide.' } }, 400) }
+  if (!isRecord(value)) return c.json({ error: { code: 'INVALID_BODY', message: 'Un objet JSON est requis.' } }, 400)
+  if (containsUserId(value)) return c.json({ error: { code: 'AUTH_FORBIDDEN', message: 'L’identité utilisateur provient exclusivement de la session Auth.' } }, 403)
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key))) {
+    return c.json({ error: { code: 'INVALID_BODY', message: 'Le corps contient des champs non autorisés.' } }, 400)
+  }
+  return value
+}
+
+function jsonEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right)
+    && left.length === right.length && left.every((value, index) => jsonEqual(value, right[index]))
+  if (isRecord(left) || isRecord(right)) {
+    if (!isRecord(left) || !isRecord(right)) return false
+    const leftKeys = Object.keys(left).sort()
+    const rightKeys = Object.keys(right).sort()
+    return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && jsonEqual(left[key], right[key]))
+  }
+  return false
 }
 
 async function readDraftBody(c: Context<AppEnv>): Promise<{ draft: unknown; expectedRevision: number } | Response> {
@@ -156,7 +433,23 @@ function containsUserId(value: unknown): boolean {
   return Object.entries(value).some(([key, nested]) => key.replace(/[_-]/g, '').toLowerCase() === 'userid' || containsUserId(nested))
 }
 
+function respondPersonalFoodError(c: Context<AppEnv>, e: unknown) {
+  return c.json({error:{code:e instanceof PersonalFoodError && e.status===409 ? 'REVISION_CONFLICT':'PERSONAL_FOOD_ERROR',message:e instanceof Error ? e.message:'Fiche invalide.'}},(e instanceof PersonalFoodError ? e.status:400) as ContentfulStatusCode)
+}
+function respondProfileError(c: Context<AppEnv>, error: unknown) {
+  if (error instanceof ProfileError) return c.json({ error: { code: 'PROFILE_ERROR', message: error.message } }, error.status as ContentfulStatusCode)
+  return c.json({ error: { code: 'PROFILE_ERROR', message: 'Le profil est momentanément indisponible.' } }, 502)
+}
+
+function respondMealTemplateError(c: Context<AppEnv>, error: unknown) {
+  if (error instanceof MealTemplateError) return c.json({ error: { code: error.status === 409 ? 'REVISION_CONFLICT' : 'INVALID_TEMPLATE', message: error.message } }, error.status as ContentfulStatusCode)
+  return respondPersistenceError(c, error)
+}
+
 function respondPersistenceError(c: Context<AppEnv>, error: unknown) {
+  if (error instanceof NutritionError) return c.json({ error: { code: error.code, message: error.message } }, 400)
+  if (error instanceof FdcError) return c.json({ error: { code: error.code, message: error.message } }, error.status as ContentfulStatusCode)
+  if (error instanceof SupabaseCatalogError) return c.json({ error: { code: 'CATALOG_ERROR', message: error.message } }, 502)
   if (error instanceof RecipePersistenceError || error instanceof JournalPersistenceError) {
     const status = error.code === 'INVALID_RECIPE' || error.code === 'INVALID_JOURNAL' ? 400
       : error.code === 'REVISION_CONFLICT' ? 409

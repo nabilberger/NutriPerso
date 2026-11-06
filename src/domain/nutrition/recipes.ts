@@ -38,6 +38,9 @@ export type RecipeIngredient = {
 }
 
 export type RecipeDraft = {
+  readonly description?: string
+  readonly instructions?: string
+  readonly archived?: boolean
   readonly id: string
   readonly name: string
   readonly ingredients: readonly RecipeIngredient[]

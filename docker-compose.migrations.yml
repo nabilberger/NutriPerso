@@ -1,0 +1,60 @@
+# Isolated plain PostgreSQL check of the complete, ordered migration chain.
+# No published ports, remote connection, persistent volume or production Auth.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: nutriperso_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-only-nutriperso
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d nutriperso_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./supabase/tests/local/bootstrap.sql:/docker-entrypoint-initdb.d/00-bootstrap.sql:ro
+      - ./supabase/migrations/20261103175325_food_catalog.sql:/docker-entrypoint-initdb.d/20261103175325_food_catalog.sql:ro
+      - ./supabase/migrations/20261104143804_recipe_persistence.sql:/docker-entrypoint-initdb.d/20261104143804_recipe_persistence.sql:ro
+      - ./supabase/migrations/20261104160000_journal_persistence.sql:/docker-entrypoint-initdb.d/20261104160000_journal_persistence.sql:ro
+      - ./supabase/migrations/20261104170000_recipe_user_ownership.sql:/docker-entrypoint-initdb.d/20261104170000_recipe_user_ownership.sql:ro
+      - ./supabase/migrations/20261104234000_user_profiles.sql:/docker-entrypoint-initdb.d/20261104234000_user_profiles.sql:ro
+      - ./supabase/migrations/20261105183000_journal_delete_precedence.sql:/docker-entrypoint-initdb.d/20261105183000_journal_delete_precedence.sql:ro
+      - ./supabase/migrations/20261106100000_meal_templates.sql:/docker-entrypoint-initdb.d/20261106100000_meal_templates.sql:ro
+      - ./supabase/migrations/20261106183939_personal_food_catalog.sql:/docker-entrypoint-initdb.d/20261106183939_personal_food_catalog.sql:ro
+
+  test:
+    image: postgres:17
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: local-only-nutriperso
+    entrypoint: ["psql"]
+    command:
+      - -h
+      - db
+      - -U
+      - postgres
+      - -d
+      - nutriperso_test
+      - -v
+      - ON_ERROR_STOP=1
+      - -f
+      - /tests/migrations.integration.sql
+      - -f
+      - /tests/meal-templates.integration.sql
+      - -f
+      - /tests/recipe-editor.integration.sql
+      - -f
+      - /tests/personal-foods.integration.sql
+      - -f
+      - /tests/personal-upgrade.integration.sql
+    volumes:
+      - ./supabase/tests/local/migrations.integration.sql:/tests/migrations.integration.sql:ro
+      - ./supabase/tests/local/meal-templates.integration.sql:/tests/meal-templates.integration.sql:ro
+      - ./supabase/tests/local/recipe-editor.integration.sql:/tests/recipe-editor.integration.sql:ro
+      - ./supabase/tests/local/personal-foods.integration.sql:/tests/personal-foods.integration.sql:ro
+      - ./supabase/tests/local/personal-upgrade.integration.sql:/tests/personal-upgrade.integration.sql:ro

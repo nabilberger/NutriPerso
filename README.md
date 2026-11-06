@@ -13,22 +13,31 @@ Socle React responsive (Vite, TypeScript strict, PWA) et Worker Hono pour l’AP
 npm install
 ```
 
-## Développement local
+## Développement local connecté
 
 1. Copier `.dev.vars.example` vers `.dev.vars` à la racine et `.env.example` vers `.env`. Configurer `FDC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` et `SUPABASE_PUBLISHABLE_KEY` dans `.dev.vars`; configurer seulement `VITE_SUPABASE_URL` et `VITE_SUPABASE_PUBLISHABLE_KEY` dans `.env`. `.dev.vars` et `.env` sont ignorés par Git.
-2. Dans un terminal, démarrer le Worker :
+2. Démarrer la pile complète en une commande :
 
 ```sh
-npm run worker:dev
+npm run dev:stack
 ```
 
-3. Dans un second terminal, démarrer le frontend :
+Le script vérifie les quatre noms de variables Worker dans `.dev.vars` sans afficher leurs valeurs, démarre Wrangler sur le port 8787, attend son écoute puis lance Vite. Si le Worker s’arrête, le proxy répond avec une explication et la commande de démarrage.
+
+Pour lancer les processus séparément, ouvrez deux terminaux et exécutez `npm run worker:dev` puis `npm run dev`.
+
+
+## Recette UI synthétique (sans services distants)
+
+Pour parcourir Historique, les 20 repas récents, la recherche, les modèles, la navigation et la reprise dans le journal sans connexion Auth, Worker, Supabase ou USDA :
 
 ```sh
-npm run dev
+npm run dev:fixtures
 ```
 
-Vite relaie `/api/*` au Worker local sur le port 8787. L’interface existante n’appelle pas encore ces routes.
+Ce mode démarre Vite seul avec `VITE_NUTRIPERSO_UI_FIXTURES=1`. Il est réservé au développement, affiche un bandeau permanent et utilise des fixtures en mémoire. Les valeurs nutritionnelles d’exemple sont synthétiques et calculées par le moteur; elles ne décrivent aucun aliment réel. Créations, renommages, suppressions et brouillons disparaissent à la fermeture de la page. Le mode ne valide pas une session Auth réelle ni le transport Worker↔Supabase REST.
+
+Un essai connecté nécessite un projet Supabase isolé avec la migration du lot #4 et un compte Auth de test. Wrangler exige `.dev.vars` avec `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY` et `FDC_API_KEY`; le frontend utilise les valeurs publiques de `.env.local`. Le schéma Supabase de production n’a pas la migration du lot #4 : ne pas y tester ces écritures. La recette PostgreSQL locale vérifie uniquement les objets SQL et ne remplace pas un essai Worker/PostgREST/Auth.
 
 ## Authentification et routes personnelles
 
@@ -65,3 +74,13 @@ npm run worker:deploy
 ```
 
 Le build TypeScript vérifie aussi les types du Worker. Les tests couvrent les réponses, unités, erreurs normalisées et l’absence de fuite de clé. Après le premier déploiement, vérifier dans Cloudflare que la route `nutri.brainboost3d.com/api/*` est active et que les quatre variables/secrets Worker sont configurés. Aucun réglage CORS n'est requis pour les appels PWA de même origine.
+
+## Recette automatisée isolée
+
+```sh
+npx playwright install chromium --only-shell
+npm run test:ui:fixtures
+npm run test:integration:migrations
+```
+
+La suite navigateur démarre sa propre instance Vite synthétique sur `127.0.0.1:4180`, couvre ordinateur/mobile et refuse tout appel réseau `/api/`. Le test migrations utilise PostgreSQL jetable sans port exposé; il applique les sept migrations puis vérifie les contrats SQL journal/modèles. Les preuves et limites sont dans [le rapport de recette](docs/RECETTE_UI_AUDIT_20261106.md) et [le plan d’intégration](docs/AUDIT_INTEGRATION_20261106.md).
