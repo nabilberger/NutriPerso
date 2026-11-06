@@ -1,9 +1,10 @@
+import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
 import {
   addFoodJournalItem, addRecipeJournalItem, cancelConfirmedMeal, confirmMeal, createJournalDay, createJournalState,
   createMeal, selectActiveMealSnapshots, type ConfirmedMealSnapshot, type JournalDayDraft,
 } from './domain/nutrition/journal.ts'
 import { createConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
-import { addRecipeIngredient, calculateRecipe, createRecipe, setRecipeServings, type FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
+import { addRecipeIngredient, calculateRecipe, createRecipe, setRecipeServings, type RecipeDraft, type FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
 import type { NutrientCode, NutrientDatum } from './domain/nutrition/types.ts'
 
 export const fixtureUserId = '00000000-0000-4000-8000-000000000001'
@@ -40,8 +41,12 @@ const chickpea = food(90001, 'Pois chiches (synthétique)', {
 })
 // Deliberately incomplete fixture retained to exercise unknown nutrient handling.
 const couscous = food(90002, 'Couscous (synthétique)', { protein: '3.8', carbohydrate: '8' })
+const personalId = '00000000-0000-4000-8000-000000090003'
+const personalBase = food(90003, 'Farine personnelle (synthétique)', { energyKcal: '165', protein: '10', carbohydrate: '20', fat: '5', fiber: '3' })
+const personalFood: FoodNutritionSnapshot = { ...personalBase, foodId: 'catalog:' + personalId, fdcId: null, sourceType: 'custom', sourceName: 'Catalogue personnel synthétique',
+  nutrients: personalBase.nutrients.map(n => ({ ...n, source: { ...n.source!, sourceType: 'custom', sourceName: 'Catalogue personnel synthétique' } })) }
 export function getFixtureFoodSource(foodId: string): FoodNutritionSnapshot | null {
-  return [chickpea, couscous].find((item) => item.foodId === foodId) ?? null
+  return [chickpea, couscous, personalFood].find((item) => item.foodId === foodId) ?? null
 }
 const recipeDraft = setRecipeServings(addRecipeIngredient(createRecipe({ id: recipeId, name: 'Bol céréales & pois chiches (synthétique)' }), {
   id: 'fixture-recipe-ingredient', foodId: chickpea.foodId,
@@ -49,6 +54,11 @@ const recipeDraft = setRecipeServings(addRecipeIngredient(createRecipe({ id: rec
 }), '2')
 const recipeSnapshot = createConfirmedRecipeSnapshot(recipeDraft, calculateRecipe(recipeDraft, new Map([[chickpea.foodId, chickpea]])),
   'nutrition-engine-v1-fixture', '2026-11-05T12:00:00.000Z', 'fixture-recipe-snapshot')
+const fixtureRecipes = new Map<string, { draft: RecipeDraft; snapshots: ConfirmedRecipeSnapshot[] }>([[recipeId, { draft: recipeDraft, snapshots: [recipeSnapshot] }]])
+// Only the opt-in synthetic UI backend persists here, never production API data.
+const fixtureStorage = typeof sessionStorage !== 'undefined' && import.meta.env?.VITE_NUTRIPERSO_UI_FIXTURES === '1' ? sessionStorage : null
+try { const stored = fixtureStorage?.getItem('nutrip-fixture-recipes-v1'); if (stored) for (const [id, record] of JSON.parse(stored)) fixtureRecipes.set(id, record) } catch { /* Seed remains available. */ }
+function saveFixtureRecipes() { fixtureStorage?.setItem('nutrip-fixture-recipes-v1', JSON.stringify([...fixtureRecipes])) }
 function dateDaysAgo(days: number): string {
   const d = new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()-days)
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
@@ -70,6 +80,9 @@ const now=new Date().toISOString()
 const templates:FixtureTemplate[]=[{id:'fixture-template-breakfast',name:'Bol du matin (synthétique)',revision:1,
   meal:{id:'fixture-template-meal',name:'Bol du matin (synthétique)',revision:1,meal:{kind:'breakfast',label:'Recette UI',items:history[0]!.items}},createdAt:now,updatedAt:now}]
 const drafts=new Map<string,JournalDayDraft>()
+try { const stored = fixtureStorage?.getItem('nutrip-fixture-journal-v1'); if (stored) { const data=JSON.parse(stored);history.splice(0,history.length,...data.history);for(const [date,day] of data.drafts)drafts.set(date,day) } } catch { /* Seed remains available. */ }
+function saveFixtureJournal() { fixtureStorage?.setItem('nutrip-fixture-journal-v1',JSON.stringify({history,drafts:[...drafts]})) }
+
 const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('fr')
 const body=(init:RequestInit)=>JSON.parse(String(init.body??'{}')) as Record<string, any>
 export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise<T>{
@@ -96,7 +109,9 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
       keyNutrients:{energy:nutrient('energy'),protein:nutrient('protein'),carbohydrates:nutrient('carbohydrate'),fat:nutrient('fat'),fiber:nutrient('fiber')},
     } as T
   }
-  if(url.pathname==='/api/private/recipes'&&method==='GET')return {recipes:[recipeDraft]} as T
+  if(url.pathname==='/api/private/recipes'&&method==='GET')return {recipes:[...fixtureRecipes.values()].map(r=>r.draft).filter(r=>!r.archived)} as T
+  if(url.pathname==='/api/private/catalog'&&method==='GET')return {foods:normalize(personalFood.description).includes(normalize(url.searchParams.get('q')??''))?[{id:personalId,description:personalFood.description,source_type:'custom',source_name:personalFood.sourceName}]:[]} as T
+  if(url.pathname==='/api/private/catalog/'+personalId&&method==='GET')return {food:personalFood} as T
   if(url.pathname==='/api/private/profile'&&method==='GET')return {profile:null} as T
   if(url.pathname==='/api/private/journal/history'&&method==='GET'){
     const q=url.searchParams.get('q')??'',from=url.searchParams.get('from')??'',to=url.searchParams.get('to')??''
@@ -118,7 +133,35 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
   }
   if(templatePath&&method==='DELETE'){const i=templates.findIndex(t=>t.id===decodeURIComponent(templatePath[1]!));if(i>=0)templates.splice(i,1);return undefined as T}
   const recipePath=/^\/api\/private\/recipes\/([^/]+)$/.exec(url.pathname)
-  if(recipePath&&method==='GET'&&decodeURIComponent(recipePath[1]!)===recipeId)return {snapshots:[recipeSnapshot]} as T
+  if(recipePath&&method==='GET'){
+    const record=fixtureRecipes.get(decodeURIComponent(recipePath[1]!)); if(!record)throw new Error('404 Recette introuvable.'); return record as T
+  }
+  const recipeDraftPath=/^\/api\/private\/recipes\/([^/]+)\/draft$/.exec(url.pathname)
+  if(recipeDraftPath&&method==='PUT'){
+    const data=body(init),draft=data.draft as RecipeDraft,id=decodeURIComponent(recipeDraftPath[1]!)
+    const record=fixtureRecipes.get(id)
+    if(draft.id!==id||!draft.name.trim()||data.expectedRevision!==(record?.draft.revision??0)||draft.revision!==Number(data.expectedRevision)+1)throw new Error('409 La recette a changé.')
+    fixtureRecipes.set(id,{draft,snapshots:record?.snapshots??[]});saveFixtureRecipes();return {draft} as T
+  }
+  const recipeConfirmPath=/^\/api\/private\/recipes\/([^/]+)\/confirm$/.exec(url.pathname)
+  if(recipeConfirmPath&&method==='POST'){
+    const record=fixtureRecipes.get(decodeURIComponent(recipeConfirmPath[1]!)),data=body(init)
+    if(!record||record.draft.archived)throw new Error('404 Recette introuvable.')
+    if(data.expectedRevision!==record.draft.revision)throw new Error('409 La recette a changé.')
+    const last=record.snapshots.at(-1)
+    if(last?.recipe.revision===record.draft.revision)return {snapshot:last} as T
+    if((last?.snapshotId??null)!==data.expectedPredecessorSnapshotId)throw new Error('409 Le prédécesseur a changé.')
+    if(!record.draft.ingredients.length||!record.draft.servings)throw new Error('Ajoutez des ingrédients et des portions.')
+    const calculation=calculateRecipe(record.draft,new Map([chickpea,couscous,personalFood].map(f=>[f.foodId,f])))
+    const snapshot=createConfirmedRecipeSnapshot(record.draft,calculation,'nutrition-engine-v1-fixture',new Date().toISOString())
+    record.snapshots.push(snapshot);saveFixtureRecipes();return {snapshot} as T
+  }
+  if(recipePath&&method==='DELETE'){
+    const record=fixtureRecipes.get(decodeURIComponent(recipePath[1]!))
+    if(!record)throw new Error('404 Recette introuvable.')
+    if(!record.draft.archived){if(body(init).expectedRevision!==record.draft.revision)throw new Error('409 La recette a changé.');record.draft={...record.draft,archived:true,revision:record.draft.revision+1};saveFixtureRecipes()}
+    return undefined as T
+  }
   if(url.pathname==='/api/private/journal'&&method==='GET'){
     const date=url.searchParams.get('date')??dateDaysAgo(0)
     const snapshots=history.filter(m=>m.localDate===date)
@@ -138,7 +181,7 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
     if(!draft||draft.id!==routeDayId)throw new Error('400 Identifiant de journée invalide dans la recette UI.')
     if(!Number.isSafeInteger(expectedRevision)||expectedRevision!==currentRevision||draft.revision!==expectedRevision+1)
       throw new Error('409 Conflit de révision du brouillon simulé.')
-    drafts.set(draft.localDate,draft)
+    drafts.set(draft.localDate,draft);saveFixtureJournal()
     return {draft} as T
   }
   if(url.pathname.endsWith('/confirm')&&method==='POST'){
@@ -154,7 +197,7 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
       {snapshotId:String(data.snapshotId),confirmedAt:String(data.confirmedAt),engineVersion:String(data.engineVersion)})
     const updated=result.state.days.find(candidate=>candidate.id===day.id)!
     drafts.set(day.localDate,updated)
-    history.splice(0,history.length,...result.state.snapshots)
+    history.splice(0,history.length,...result.state.snapshots);saveFixtureJournal()
     return {day:updated,snapshot:result.snapshot} as T
   }
   const cancelPath=/^\/api\/private\/journal\/snapshots\/([^/]+)\/cancel$/.exec(url.pathname)
@@ -178,7 +221,7 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
     const result=cancelConfirmedMeal({days:[day],snapshots:history},snapshotId,input)
     const updated={...day,revision:day.revision+1,meals:day.meals.filter(m=>m.id!==predecessor.logicalMealId)}
     drafts.set(updated.localDate,updated)
-    history.splice(0,history.length,...result.state.snapshots)
+    history.splice(0,history.length,...result.state.snapshots);saveFixtureJournal()
     return {day:updated,snapshot:result.snapshot} as T
   }
   throw new Error(`Mode recette UI : route non simulée; aucun appel réseau effectué (${method} ${url.pathname}).`)

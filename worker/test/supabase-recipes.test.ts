@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util'
+import { createWorkerApp } from '../src/index.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { calculateRecipe, createRecipe, addRecipeIngredient, updateRecipeName, type FoodNutritionSnapshot } from '../../src/domain/nutrition/recipes.ts'
@@ -67,7 +69,7 @@ function mockDataApi() {
         || body.p_snapshot.recipe.revision !== storedDraft.revision
         || JSON.stringify(body.p_snapshot.recipe.servings) !== JSON.stringify(storedDraft.servings)
         || JSON.stringify(body.p_snapshot.recipe.finalWeight) !== JSON.stringify(storedDraft.finalWeight)
-        || JSON.stringify(snapshotIngredients) !== JSON.stringify(storedDraft.ingredients)) return conflict()
+        || !isDeepStrictEqual(snapshotIngredients, storedDraft.ingredients)) return conflict()
       const existing = snapshots.find((row) => row.user_id === body.p_user_id && row.snapshot_id === body.p_snapshot.snapshotId)
       if (existing) {
         if (JSON.stringify(existing.snapshot) === JSON.stringify(body.p_snapshot)
@@ -315,4 +317,117 @@ test('recipe drafts and snapshots are isolated by user on reads and writes', asy
   assert.equal(mock.recipes.size, 1)
   assert.equal(mock.snapshots.length, 1)
   assert.ok(mock.requests.filter(({ url }) => url.pathname.endsWith('/recipes')).every(({ url }) => url.searchParams.get('user_id') === `eq.${scope.userId}` || url.searchParams.get('user_id') === `eq.${otherScope.userId}`))
+})
+
+function recipeWorker() {
+  const db = mockDataApi()
+  let fdcCalls = 0
+  const fetcher: typeof fetch = async (input, init = {}) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString())
+    if (url.pathname === '/auth/v1/user') return Response.json({ id: new Headers(init.headers).get('authorization')?.includes('other') ? otherScope.userId : scope.userId, role: 'authenticated' })
+    if (url.hostname === 'api.nal.usda.gov') {
+      fdcCalls++
+      return Response.json({ fdcId: 12345, description: 'Oats', dataType: 'Foundation', foodNutrients: [
+        { nutrient: { id: 1003, name: 'Protein', unitName: 'g' }, amount: 10 },
+        { nutrient: { id: 1008, name: 'Energy', unitName: 'kcal' }, amount: 139 },
+      ] })
+    }
+    if (url.pathname.endsWith('/foods')) return Response.json([{ id: foodId, source_type: 'custom', fdc_id: null, description: 'Personnel', category: null, data_type: null, brand_owner: null, source_name: 'Manuel', source_reference: 'étiquette', source_notes: null, imported_at: null }])
+    if (url.pathname.endsWith('/food_nutrients')) return Response.json([{ food_id: foodId, nutrient_code: 'protein', nutrient_name: 'Protein', fdc_nutrient_id: null, value: '10', unit: 'g', reference_quantity: '100', reference_unit: 'g', basis_source: 'manual' }])
+    return db.fetcher(input, init)
+  }
+  const app = createWorkerApp({ fetcher })
+  const call = (path: string, method = 'GET', body?: unknown, token = 'owner') => app.request('/api/private' + path, {
+    method, headers: { Authorization: 'Bearer e30.e30.' + token, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }, { ...env, SUPABASE_PUBLISHABLE_KEY: 'publishable-test', FDC_API_KEY: 'test-server-key' })
+  return { db, call, fdcCalls: () => fdcCalls }
+}
+function editorDraft(): RecipeDraft {
+  return { ...createRecipe({ id: recipeId, name: 'Maison' }), servings: '2', description: 'Description conservée', instructions: 'Cuire puis servir.',
+    ingredients: [{ id: 'ingredient', foodId: 'usda:12345', position: 0, quantity: { kind: 'physical', amount: '200', unit: 'g', weightNature: 'edible' } }] }
+}
+test('recipe editor API saves, reloads, confirms with Worker sources and retries without duplicate snapshots', async () => {
+  const { call, db, fdcCalls } = recipeWorker()
+  const draft = editorDraft()
+  assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft, expectedRevision: 0 })).status, 200)
+  const loaded = await (await call(`/recipes/${recipeId}`)).json() as { draft: RecipeDraft }
+  assert.equal(loaded.draft.instructions, draft.instructions)
+  assert.equal(loaded.draft.description, draft.description)
+  const response = await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 1, expectedPredecessorSnapshotId: null })
+  assert.equal(response.status, 200)
+  const { snapshot } = await response.json() as { snapshot: ConfirmedRecipeSnapshot }
+  assert.equal(snapshot.referenceTotals.find(t => t.code === 'protein')?.exactNumerator, '20')
+  assert.equal(snapshot.referenceTotals.find(t => t.code === 'fat')?.status, 'unknown')
+  assert.equal(fdcCalls(), 1)
+  const retry = await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 1, expectedPredecessorSnapshotId: null })
+  assert.equal(retry.status, 200); assert.equal(db.snapshots.length, 1); assert.equal(fdcCalls(), 1)
+})
+
+test('recipe editor API rejects foreign ownership, stale revisions, client totals and invalid recipes', async () => {
+  const { call, db } = recipeWorker()
+  await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: editorDraft(), expectedRevision: 0 })
+  assert.equal((await call(`/recipes/${recipeId}`, 'GET', undefined, 'other')).status, 404)
+  assert.equal((await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 1, expectedPredecessorSnapshotId: null }, 'other')).status, 404)
+  assert.equal((await call(`/recipes/${recipeId}`, 'DELETE', { expectedRevision: 1 }, 'other')).status, 404)
+  assert.equal((await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 99, expectedPredecessorSnapshotId: null })).status, 409)
+  assert.equal((await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 1, expectedPredecessorSnapshotId: null, totals: {} })).status, 400)
+  assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: { ...editorDraft(), description: 12 }, expectedRevision: 0 })).status, 400)
+  assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: { ...editorDraft(), revision: 2, ingredients: [] }, expectedRevision: 1 })).status, 200)
+  assert.equal((await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 2, expectedPredecessorSnapshotId: null })).status, 400)
+  assert.equal(db.snapshots.length, 0)
+})
+
+test('editing then archiving a recipe preserves all immutable snapshots and owned reads', async () => {
+  const { call, db } = recipeWorker()
+  await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: editorDraft(), expectedRevision: 0 })
+  const first = await (await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 1, expectedPredecessorSnapshotId: null })).json() as { snapshot: ConfirmedRecipeSnapshot }
+  const historical = JSON.stringify(first.snapshot)
+  const edited = { ...editorDraft(), revision: 2, name: 'Maison modifiée', servings: '4' }
+  assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: edited, expectedRevision: 1 })).status, 200)
+  assert.equal((await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 2, expectedPredecessorSnapshotId: 'wrong' })).status, 409)
+  assert.equal((await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 2, expectedPredecessorSnapshotId: first.snapshot.snapshotId })).status, 200)
+  assert.equal((await call(`/recipes/${recipeId}`, 'DELETE', { expectedRevision: 1 })).status, 409)
+  assert.equal((await call(`/recipes/${recipeId}`, 'DELETE', { expectedRevision: 2 })).status, 204)
+  assert.equal((await call(`/recipes/${recipeId}`, 'DELETE', { expectedRevision: 2 })).status, 204)
+  assert.deepEqual(await (await call('/recipes')).json(), { recipes: [] })
+  assert.equal((await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 3, expectedPredecessorSnapshotId: null })).status, 404)
+  const loaded = await (await call(`/recipes/${recipeId}`)).json() as { draft: RecipeDraft; snapshots: ConfirmedRecipeSnapshot[] }
+  assert.equal(loaded.draft.archived, true)
+  assert.equal(loaded.snapshots.length, 2)
+  assert.equal(JSON.stringify(loaded.snapshots[0]), historical)
+  assert.equal(db.snapshots.length, 2)
+})
+
+test('recipe confirmation resolves personal catalog ingredients on the server without trusting client sources', async () => {
+  const { call } = recipeWorker()
+  const draft = editorDraft()
+  const mixed = { ...draft, ingredients: [...draft.ingredients, { id: 'personal', foodId: 'catalog:' + foodId, position: 1,
+    quantity: { kind: 'physical' as const, amount: '100', unit: 'g' as const, weightNature: 'edible' as const } }] }
+  assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: mixed, expectedRevision: 0 })).status, 200)
+  const response = await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 1, expectedPredecessorSnapshotId: null })
+  assert.equal(response.status, 200)
+  const data = await response.json() as { snapshot: ConfirmedRecipeSnapshot }
+  assert.equal(data.snapshot.referenceTotals.find(t => t.code === 'protein')?.exactNumerator, '30')
+  assert.equal(data.snapshot.ingredients[1]!.food.sourceType, 'custom')
+  assert.equal(data.snapshot.referenceTotals.find(t => t.code === 'energy')?.status, 'partial')
+})
+
+test('legacy bare catalogue UUID ingredients retain their identity through confirmation', async () => {
+  const { call } = recipeWorker()
+  const draft = editorDraft()
+  const legacy = { ...draft, ingredients: [{ ...draft.ingredients[0]!, foodId }] }
+  assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: legacy, expectedRevision: 0 })).status, 200)
+  const response = await call(`/recipes/${recipeId}/confirm`, 'POST', { expectedRevision: 1, expectedPredecessorSnapshotId: null })
+  assert.equal(response.status, 200)
+  const { snapshot } = await response.json() as { snapshot: ConfirmedRecipeSnapshot }
+  assert.equal(snapshot.ingredients[0]!.food.foodId, foodId)
+  assert.equal(snapshot.ingredients[0]!.food.sourceType, 'custom')
+})
+
+test('recipe editor rejects zero/negative portions and final weight before persisting', async () => {
+  const { call, db } = recipeWorker()
+  for (const change of [{ servings: '0' }, { servings: '-1' }, { finalWeight: { amount: '0', unit: 'g', weightNature: 'edible' } }, { finalWeight: { amount: '-1', unit: 'g', weightNature: 'edible' } }]) {
+    assert.equal((await call(`/recipes/${recipeId}/draft`, 'PUT', { draft: { ...editorDraft(), ...change }, expectedRevision: 0 })).status, 400)
+  }
+  assert.equal(db.recipes.size, 0)
 })

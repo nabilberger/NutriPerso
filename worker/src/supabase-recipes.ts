@@ -1,6 +1,6 @@
 /** Server-only persistence for recipe drafts and immutable recipe snapshots. */
 import { createConfirmedRecipeSnapshot, type ConfirmedRecipeSnapshot } from '../../src/domain/nutrition/recipe-snapshot.ts'
-import { calculateRecipe, type FoodNutritionSnapshot, type RecipeAllocation, type RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
+import { setRecipeFinalWeight, setRecipeServings, calculateRecipe, type FoodNutritionSnapshot, type RecipeAllocation, type RecipeDraft } from '../../src/domain/nutrition/recipes.ts'
 import { parseDecimal } from '../../src/domain/nutrition/decimal.ts'
 import type { SupabaseCatalogEnv } from './supabase-catalog.ts'
 
@@ -137,13 +137,14 @@ export async function listRecipeDrafts(
   url.searchParams.set('select', 'user_id,draft')
   url.searchParams.set('user_id', `eq.${scope.userId}`)
   url.searchParams.set('order', 'updated_at.desc')
+  url.searchParams.set('or', '(draft->>archived.is.null,draft->>archived.eq.false)')
   url.searchParams.set('limit', String(boundedLimit))
   const rows = await requestJson<unknown[]>(url, env, fetcher)
   if (!Array.isArray(rows)) throw new RecipePersistenceError('REMOTE_ERROR', 'Supabase a retourné une liste de recettes invalide.')
   return rows.map((row) => {
     if (!isRecord(row) || row.user_id !== scope.userId) throw new RecipePersistenceError('REMOTE_ERROR', 'Supabase a retourné une recette invalide ou appartenant à un autre utilisateur.')
     return parseDraft(row.draft)
-  })
+  }).filter(draft => !draft.archived)
 }
 
 function assertDraft(value: unknown): asserts value is RecipeDraft {
@@ -154,6 +155,10 @@ function assertDraft(value: unknown): asserts value is RecipeDraft {
       && value.finalWeight.unit === 'g' && value.finalWeight.weightNature === 'edible'))) {
     throw new RecipePersistenceError('INVALID_RECIPE', 'Le brouillon de recette est invalide.')
   }
+  for (const key of ['description', 'instructions'] as const) if (value[key] !== undefined && typeof value[key] !== 'string') throw new RecipePersistenceError('INVALID_RECIPE', 'Description ou préparation invalide.')
+  if (value.archived !== undefined && typeof value.archived !== 'boolean') throw new RecipePersistenceError('INVALID_RECIPE', 'État de recette invalide.')
+  if (value.servings !== null) setRecipeServings(value as unknown as RecipeDraft, value.servings as string)
+  if (value.finalWeight !== null) setRecipeFinalWeight(value as unknown as RecipeDraft, value.finalWeight as RecipeDraft['finalWeight'])
   const ingredientIds = new Set<string>()
   for (const [position, ingredient] of value.ingredients.entries()) {
     if (!isRecord(ingredient) || typeof ingredient.id !== 'string' || !ingredient.id.trim()

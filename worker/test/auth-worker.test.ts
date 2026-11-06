@@ -255,3 +255,13 @@ test('journal date lookup is authenticated and scopes the date query to the veri
   const dateRead = calls.find((url) => url.searchParams.has('local_date'))
   assert.equal(dateRead?.searchParams.get('user_id'), `eq.${userA}`)
 })
+
+test('catalog and recipe editor routes require a verified session before reading or writing', async () => {
+  let calls = 0
+  const app = createWorkerApp({ fetcher: async () => { calls++; throw new Error('Must not reach backend') } })
+  for (const [path, method] of [
+    ['/api/private/catalog?q=farine', 'GET'], ['/api/private/catalog/10000000-0000-4000-8000-000000000005', 'GET'],
+    [`/api/private/recipes/${recipeId}/confirm`, 'POST'], [`/api/private/recipes/${recipeId}`, 'DELETE'],
+  ]) assert.equal((await app.request(path, { method }, env)).status, 401)
+  assert.equal(calls, 0)
+})

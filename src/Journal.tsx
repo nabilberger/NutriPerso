@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import {
   addFoodJournalItem, calculateJournalDayPreview, calculateJournalMeal, cancelConfirmedMeal,
   createJournalDay, createJournalState, createMeal, createMealCorrectionDraft, removeJournalItem,
-  removeMealDraft, selectActiveMealSnapshots, setFoodJournalItemQuantity, updateMealDetails,
+  removeMealDraft, selectActiveMealSnapshots, setRecipeJournalItemQuantity, setFoodJournalItemQuantity, updateMealDetails,
   type ConfirmedMealSnapshot, type JournalDayDraft, type JournalState, type MealKind,
 } from './domain/nutrition/journal.ts'
 import type { FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
@@ -393,7 +393,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
               <div className="journal-food-name"><b>{item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? item.foodId}</b><small>{item.pinnedFoodSnapshot?.dataType ?? cache.sources[item.foodId]?.dataType ?? 'Source USDA'}</small></div>
               <QuantityInput itemId={item.id} mealId={meal.id} quantity={item.quantity} onChange={(quantity) => mutate((current) => setFoodJournalItemQuantity(current, cache.day!.id, meal.id, item.id, quantity))}/>
               <button type="button" className="journal-link danger" aria-label={`Retirer ${item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? 'cet aliment'}`} onClick={() => mutate((current) => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer</button>
-            </article> : <article className="journal-food" key={item.id}><div className="journal-food-name"><b>{item.recipeSnapshot.recipe.name}</b><small>Recette confirmée</small></div><span>{item.quantity.amount} {item.quantity.kind === 'servings' ? 'portion(s)' : 'g'}</span></article>)}</div>}
+            </article> : <article className="journal-food" key={item.id}><div className="journal-food-name"><b>{item.recipeSnapshot.recipe.name}</b><small>Recette confirmée</small></div><RecipeQuantityInput quantity={item.quantity} allowWeight={item.recipeSnapshot.recipe.finalWeight !== null} onChange={quantity => mutate(current => setRecipeJournalItemQuantity(current, cache.day!.id, meal.id, item.id, quantity))}/><button type="button" className="journal-link danger" onClick={() => mutate(current => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer la recette</button></article>)}</div>}
           <div className="journal-meal-totals"><b>Apports de ce repas</b>{sections.map(({code,label,unit})=><span key={code}>{label} <strong>{formatTotal(calculateMealTotal(state, cache.day?.id, meal.id, sources, code), unit)}</strong></span>)}</div>
           {addingFoodTo === meal.id ? <FoodPicker onCancel={() => setAddingFoodTo(null)} onSelect={(food, quantity) => addSelectedFood(meal.id, food, quantity)}/> :
             <button type="button" className="journal-add-food" onClick={() => setAddingFoodTo(meal.id)}>+ Ajouter un aliment</button>}
@@ -443,7 +443,15 @@ function QuantityInput({ itemId, mealId, quantity, onChange }: { readonly itemId
     {isMass && quantity.kind === 'physical' && <label>Poids<select value={quantity.weightNature} onChange={(event) => onChange({ ...quantity, weightNature: event.target.value as 'edible' | 'gross' | 'unknown' })}><option value="edible">Comestible</option><option value="gross">Brut</option><option value="unknown">Inconnu</option></select></label>}
   </div>
 }
-function FoodPicker({ onCancel, onSelect }: { readonly onCancel: () => void; readonly onSelect: (food: FoodNutritionSnapshot, quantity: FoodQuantityInput) => void }) {
+function RecipeQuantityInput({ quantity, allowWeight, onChange }: { quantity: import('./domain/nutrition/journal').RecipeJournalQuantity; allowWeight: boolean; onChange: (quantity: import('./domain/nutrition/journal').RecipeJournalQuantity) => void }) {
+  const [amount, setAmount] = useState(quantity.amount)
+  useEffect(() => setAmount(quantity.amount), [quantity.amount])
+  return <div className="journal-quantity"><label>{quantity.kind === 'servings' ? 'Portions consommées' : 'Poids consommé (g)'}<input inputMode="decimal" value={amount} onChange={e => {
+    setAmount(e.target.value)
+    try { const normalized = e.target.value.replace(',', '.'); if (decimalToFraction(parseDecimal(normalized)).numerator > 0n) onChange({ ...quantity, amount: normalized }) } catch { /* Keep incomplete input until blur. */ }
+  }} onBlur={() => setAmount(quantity.amount)}/></label>{allowWeight && <label>Mesure de recette<select value={quantity.kind} onChange={e => onChange(e.target.value === 'servings' ? { kind: 'servings', amount: quantity.amount } : { kind: 'weight', amount: quantity.amount, unit: 'g', weightNature: 'edible' })}><option value="servings">Portions</option><option value="weight">Grammes</option></select></label>}</div>
+}
+export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas' }: { addLabel?: string; readonly onCancel: () => void; readonly onSelect: (food: FoodNutritionSnapshot, quantity: FoodQuantityInput) => void }) {
   const [query, setQuery] = useState('')
   const [foods, setFoods] = useState<readonly SearchFood[]>([])
   const [detail, setDetail] = useState<FoodNutritionSnapshot | null>(null)
@@ -493,7 +501,7 @@ function FoodPicker({ onCancel, onSelect }: { readonly onCancel: () => void; rea
     {error && <p role="alert" className="journal-error">{error}</p>}
     {foods.length > 0 && <div className="journal-search-results" aria-busy={busy}>{foods.map((food) => <button type="button" key={food.fdcId} onClick={() => void choose(food)} disabled={busy}><b>{food.description}</b><small>{food.brandOwner ?? food.dataType ?? 'USDA'}</small></button>)}</div>}
     {totalPages > 1 && <div className="journal-pagination"><button type="button" disabled={page <= 1 || busy} onClick={() => void loadPage(page - 1)}>Précédent</button><span>Page {page} sur {totalPages}</span><button type="button" disabled={page >= totalPages || busy} onClick={() => void loadPage(page + 1)}>Suivant</button></div>}
-    {detail && <form className="journal-food-detail" onSubmit={add}><div><b>{detail.description}</b><small>{detail.dataType ?? 'USDA'} · {detail.fdcId}</small></div><label>Quantité<input type="text" inputMode="decimal" required value={amount} onChange={(event) => setAmount(event.target.value)}/></label><label>Unité<select value={unit} onChange={(event) => { const next = event.target.value as 'g' | 'ml'; setUnit(next); if (next === 'ml') setNature('edible') }}><option value="g">g</option><option value="ml">ml</option></select></label>{unit === 'g' && <label>Nature du poids<select value={nature} onChange={(event) => setNature(event.target.value as typeof nature)}><option value="edible">Comestible</option><option value="gross">Brut</option><option value="unknown">Inconnue</option></select></label>}<button className="journal-primary" type="submit">Ajouter au repas</button></form>}
+    {detail && <form className="journal-food-detail" onSubmit={add}><div><b>{detail.description}</b><small>{detail.dataType ?? 'USDA'} · {detail.fdcId}</small></div><label>Quantité<input type="text" inputMode="decimal" required value={amount} onChange={(event) => setAmount(event.target.value)}/></label><label>Unité<select value={unit} onChange={(event) => { const next = event.target.value as 'g' | 'ml'; setUnit(next); if (next === 'ml') setNature('edible') }}><option value="g">g</option><option value="ml">ml</option></select></label>{unit === 'g' && <label>Nature du poids<select value={nature} onChange={(event) => setNature(event.target.value as typeof nature)}><option value="edible">Comestible</option><option value="gross">Brut</option><option value="unknown">Inconnue</option></select></label>}<button className="journal-primary" type="submit">{addLabel}</button></form>}
   </section>
 }
 
@@ -501,7 +509,7 @@ function calculateMealTotal(state: JournalState, dayId: string | undefined, meal
   if (!dayId) return undefined
   try { return calculateJournalMeal(state, dayId, mealId, { foods: sources }).totals[code] } catch { return undefined }
 }
-function formatTotal(total: NutrientTotal | undefined, unit: string): string {
+export function formatTotal(total: NutrientTotal | undefined, unit: string): string {
   if (!total) return 'Inconnu'
   const scale = unit === 'kcal' ? 0 : 1
   if (total.status === 'unknown') return 'Inconnu'
