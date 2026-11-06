@@ -8,19 +8,38 @@ import type { NutrientDatum } from './domain/nutrition/types.ts'
 
 export const fixtureUserId = '00000000-0000-4000-8000-000000000001'
 const recipeId = 'fixture-recipe-bowl'
-function food(fdcId: number, description: string, protein: string): FoodNutritionSnapshot {
+type SyntheticNutrients = {
+  protein: string
+  carbohydrate: string
+  energyKcal?: string
+  fat?: string
+  fiber?: string
+}
+function food(fdcId: number, description: string, values: SyntheticNutrients): FoodNutritionSnapshot {
   const foodId = `usda:${fdcId}`
   const source = { sourceType: 'usda' as const, sourceName: 'NutriPerso UI fixture', sourceReference: `fixture:${fdcId}`, nutrientSourceId: 1003 }
+  const datum = (code: NutrientDatum extends infer _ ? 'energy' | 'protein' | 'carbohydrate' | 'fat' | 'fiber' : never,
+    sourceValue: string, sourceUnit: 'kcal' | 'g', nutrientSourceId: number): NutrientDatum =>
+    ({ status: 'reported', code, sourceValue, sourceUnit, basis: { amount: '100', unit: 'g', source: 'manual' },
+      source: { ...source, nutrientSourceId } })
   const nutrients: NutrientDatum[] = [
-    { status: 'reported', code: 'protein', sourceValue: protein, sourceUnit: 'g', basis: { amount: '100', unit: 'g', source: 'manual' }, source },
-    { status: 'reported', code: 'carbohydrate', sourceValue: '8', sourceUnit: 'g', basis: { amount: '100', unit: 'g', source: 'manual' }, source: { ...source, nutrientSourceId: 1005 } },
+    ...(values.energyKcal === undefined ? [] : [datum('energy', values.energyKcal, 'kcal', 1008)]),
+    datum('protein', values.protein, 'g', 1003),
+    datum('carbohydrate', values.carbohydrate, 'g', 1005),
+    ...(values.fat === undefined ? [] : [datum('fat', values.fat, 'g', 1004)]),
+    ...(values.fiber === undefined ? [] : [datum('fiber', values.fiber, 'g', 1079)]),
   ]
   return { foodId, sourceType: 'usda', fdcId, description, category: 'Synthétique', dataType: 'Fixture', brandOwner: null,
     sourceName: 'NutriPerso UI fixture', sourceReference: `fixture:${fdcId}`, sourceNotes: 'Valeurs synthétiques réservées à la recette UI.',
     nutrients, portionEquivalences: [], edibleYieldConversions: [] }
 }
-const chickpea = food(90001, 'Pois chiches (synthétique)', '8.9')
-const couscous = food(90002, 'Couscous (synthétique)', '3.8')
+// Complete fixture for UI/meal-flow coverage: values are explicitly synthetic per 100 g.
+// Energy uses legacy USDA datum 1008 so the existing selector chooses it without summing sources.
+const chickpea = food(90001, 'Pois chiches (synthétique)', {
+  energyKcal: '139', protein: '8.9', carbohydrate: '8', fat: '2.6', fiber: '7.6',
+})
+// Deliberately incomplete fixture retained to exercise unknown nutrient handling.
+const couscous = food(90002, 'Couscous (synthétique)', { protein: '3.8', carbohydrate: '8' })
 export function getFixtureFoodSource(foodId: string): FoodNutritionSnapshot | null {
   return [chickpea, couscous].find((item) => item.foodId === foodId) ?? null
 }
