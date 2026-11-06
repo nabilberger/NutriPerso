@@ -17,5 +17,21 @@ export function validatePhotoData(data: unknown): string {
   if (typeof data !== 'string' || data.length > 1_400_000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error('Photo JPEG compressée requise (1 Mo maximum).')
   const bytes = atob(data.split(',')[1]!)
   if (bytes.charCodeAt(0) !== 255 || bytes.charCodeAt(1) !== 216 || bytes.charCodeAt(2) !== 255) throw new Error('JPEG invalide.')
+  let offset=2,dimensions=false
+  while(offset+4<bytes.length){
+    if(bytes.charCodeAt(offset)!==255)break
+    const marker=bytes.charCodeAt(offset+1);offset+=2
+    if(marker===0xda || marker===0xd9)break
+    const length=bytes.charCodeAt(offset)*256+bytes.charCodeAt(offset+1)
+    if(length<2 || offset+length>bytes.length)throw new Error('JPEG invalide.')
+    if([0xc0,0xc1,0xc2].includes(marker)){
+      const height=bytes.charCodeAt(offset+3)*256+bytes.charCodeAt(offset+4)
+      const width=bytes.charCodeAt(offset+5)*256+bytes.charCodeAt(offset+6)
+      if(length<8 || !width || !height || width>1280 || height>1280)throw new Error('Dimensions photo invalides.')
+      dimensions=true;break
+    }
+    offset+=length
+  }
+  if(!dimensions)throw new Error('Dimensions JPEG introuvables.')
   return data.split(',')[1]!
 }
