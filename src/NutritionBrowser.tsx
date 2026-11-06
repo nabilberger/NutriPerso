@@ -1,3 +1,4 @@
+import { requestFoodCatalog } from './catalog-client'
 import {useEffect,useState,type FormEvent} from 'react'
 import {requestPrivateJson} from './auth/client'
 
@@ -26,7 +27,7 @@ export function FoodExplorer(){
     e.preventDefault();const q=query.trim();if(q.length<2){setError('Saisissez au moins deux caractères.');return}
     setSearching(true);setSearchUnavailable(false);setError('');setSelected(null);setFoods([]);setTotal(0);setSearched(q)
     try{
-      const response=await fetch('/api/foods/search?q='+encodeURIComponent(q)+'&pageSize=25',{cache:'no-store'})
+      const response=await requestFoodCatalog('/api/foods/search?q='+encodeURIComponent(q)+'&pageSize=25')
       if(!response.ok)throw new Error('La recherche des aliments est momentanément indisponible.')
       const data=await response.json() as SearchResponse
       setFoods(data.foods);setTotal(data.totalHits)
@@ -36,7 +37,7 @@ export function FoodExplorer(){
   async function choose(food:SearchFood){
     setLoadingFdcId(food.fdcId);setSelected(null);setError('')
     try{
-      const response=await fetch('/api/foods/'+food.fdcId,{cache:'no-store'})
+      const response=await requestFoodCatalog('/api/foods/'+food.fdcId)
       if(!response.ok)throw new Error('La fiche nutritionnelle est indisponible.')
       setSelected(await response.json() as FoodDetail)
     }catch(e){setError(e instanceof Error?e.message:'Fiche indisponible.')}

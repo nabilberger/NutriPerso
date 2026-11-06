@@ -8,6 +8,12 @@ import {
 import type { FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
 import type { FoodQuantityInput } from './domain/nutrition/portions.ts'
 import type { NutrientTotal } from './domain/nutrition/types.ts'
+import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
+import { buildMealReuseDraft, selectCurrentRecipeSnapshot, type MealReuseDTO } from './meal-reuse'
+import { createUuidV4 } from './secure-uuid.ts'
+import { uiFixtureMode } from './ui-fixture-mode'
+import { getFixtureFoodSource } from './dev-ui-fixtures'
+import { requestFoodCatalog } from './catalog-client'
 import { decimalToFraction, fractionToDecimal, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { requestPrivateJson } from './auth/client'
@@ -29,7 +35,7 @@ const sections: readonly { readonly code: DisplaySection; readonly label: string
 const mealLabels: Record<MealKind, string> = { breakfast: 'Petit-déjeuner', lunch: 'Déjeuner', dinner: 'Dîner', snack: 'Collation', custom: 'Autre repas' }
 const engineVersion = 'nutrition-engine-v1'
 
-export default function Journal({ userId }: { readonly userId: string }) {
+export default function Journal({ userId, reuseRequest, onReuseConsumed }: { readonly userId: string; readonly reuseRequest: { readonly token: number; readonly source: MealReuseDTO } | null; readonly onReuseConsumed: () => void }) {
   const timeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', [])
   const [date, setDate] = useState(() => todayIn(timeZone))
   const [cache, setCache] = useState<JournalCache>(emptyJournalCache)
@@ -140,6 +146,8 @@ export default function Journal({ userId }: { readonly userId: string }) {
         } catch {
           setMessageForKey(requestKey, 'Synchronisation en attente : la dernière version serveur n’a pas pu être relue.')
         }
+      } else if (uiFixtureMode) {
+        setMessageForKey(requestKey, `Erreur de simulation locale : ${message || 'la transition fictive n’a pas abouti.'}`)
       } else setMessageForKey(requestKey, navigator.onLine
         ? 'Serveur inaccessible : les changements restent en attente sur cet appareil.'
         : storageErrorRef.current ? 'Stockage local indisponible : la modification n’est pas sauvegardée et sera perdue à la fermeture.'
@@ -238,10 +246,10 @@ export default function Journal({ userId }: { readonly userId: string }) {
       let current: JournalState = { days: cacheRef.current.day ? [cacheRef.current.day] : [], snapshots: cacheRef.current.snapshots }
       let day = cacheRef.current.day
       if (!day) {
-        current = createJournalDay(createJournalState(), { id: crypto.randomUUID(), localDate: date, timeZone })
+        current = createJournalDay(createJournalState(), { id: createUuidV4(), localDate: date, timeZone })
         day = current.days[0]!
       }
-      current = createMeal(current, day.id, { id: crypto.randomUUID(), kind: newMealKind, label: newMealLabel || null,
+      current = createMeal(current, day.id, { id: createUuidV4(), kind: newMealKind, label: newMealLabel || null,
         occurredAt: inputToInstant(newMealTime), sortOrder: day.meals.length })
       commit({ ...cacheRef.current, day: current.days[0]!, dirty: true, conflict: false })
       setAddingMeal(false); setNewMealLabel(''); setError('')
@@ -249,14 +257,14 @@ export default function Journal({ userId }: { readonly userId: string }) {
   }
 
   function requestConfirm(mealId: string) {
-    commit({ ...cacheRef.current, pendingConfirm: { mealId, snapshotId: crypto.randomUUID(),
+    commit({ ...cacheRef.current, pendingConfirm: { mealId, snapshotId: createUuidV4(),
       confirmedAt: new Date().toISOString(), engineVersion }, conflict: false })
     setSyncMessage(!online && storageErrorRef.current ? 'Confirmation en attente, mais le stockage local a échoué : le brouillon n’est pas sauvegardé hors connexion.' : online ? 'Confirmation en cours…' : 'Confirmation en attente de connexion ; le brouillon reste conservé.')
     if (online) void sync()
   }
 
   function requestCancel(snapshot: ConfirmedMealSnapshot) {
-    const pending: PendingJournalCancel = { snapshotId: snapshot.snapshotId, newSnapshotId: crypto.randomUUID(),
+    const pending: PendingJournalCancel = { snapshotId: snapshot.snapshotId, newSnapshotId: createUuidV4(),
       confirmedAt: new Date().toISOString(), engineVersion }
     try {
       const result = cancelConfirmedMeal({ days: cacheRef.current.day ? [cacheRef.current.day] : [], snapshots: cacheRef.current.snapshots },
@@ -282,7 +290,7 @@ export default function Journal({ userId }: { readonly userId: string }) {
     try {
       const current = { days: cacheRef.current.day ? [cacheRef.current.day] : [], snapshots: cacheRef.current.snapshots }
       const next = addFoodJournalItem(current, cacheRef.current.day!.id, mealId, {
-        id: crypto.randomUUID(), foodId: food.foodId, quantity,
+        id: createUuidV4(), foodId: food.foodId, quantity,
         sortOrder: cacheRef.current.day!.meals.find((meal) => meal.id === mealId)?.items.length ?? 0,
       })
       commit({ ...cacheRef.current, day: next.days[0]!, sources: { ...cacheRef.current.sources, [food.foodId]: food },
@@ -291,12 +299,65 @@ export default function Journal({ userId }: { readonly userId: string }) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'L’aliment n’a pas pu être ajouté.') }
   }
 
-  async function attachPhoto(file: File | undefined) {
+  useEffect(() => {
+    if (!reuseRequest || loading) return
+    const today = todayIn(timeZone)
+    if (date !== today) { setDate(today); return }
+    let cancelled = false
+    const run = async () => {
+      try {
+        const cacheNow = cacheRef.current
+        if (cacheNow.conflict) throw new Error('Résolvez le conflit de synchronisation avant de reprendre un repas.')
+        let day = cacheNow.day?.localDate === today ? cacheNow.day : null
+        let state: JournalState = { days: day ? [day] : [], snapshots: cacheNow.snapshots }
+        if (!day) {
+          state = createJournalDay(state, { id: createUuidV4(), localDate: today, timeZone })
+          day = state.days[0]!
+        }
+        const recipeIds = [...new Set(reuseRequest.source.items.flatMap((item) => item.kind === 'recipe' ? [item.recipeId] : []))]
+        const recipeEntries = await Promise.all(recipeIds.map(async (recipeId) => {
+          const result = await requestPrivateJson<{ snapshots: ConfirmedRecipeSnapshot[] }>(`/api/private/recipes/${encodeURIComponent(recipeId)}`)
+          const latest = selectCurrentRecipeSnapshot(result.snapshots, recipeId)
+          if (!latest) throw new Error('Aucun snapshot confirmé actuel de cette recette n’est disponible.')
+          return [recipeId, latest] as const
+        }))
+        const recipes = Object.fromEntries(recipeEntries)
+        const reusedState = buildMealReuseDraft(
+          { days: day ? [day] : [], snapshots: cacheNow.snapshots },
+          { id: day?.id ?? createUuidV4(), localDate: today, timeZone },
+          reuseRequest.source, recipes, () => createUuidV4(),
+        )
+        if (cancelled) return
+        const nextDay = reusedState.days.find((entry) => entry.id === day!.id)!
+        const currentFoods = { ...cacheNow.sources }
+        for (const item of reuseRequest.source.items) if (item.kind === 'food') delete currentFoods[item.foodId]
+        const currentSources = await loadFoodSources(nextDay, currentFoods, () => !cancelled)
+        if (cancelled) return
+        commit({ ...cacheNow, day: nextDay, sources: currentSources, dirty: true })
+        setSyncMessage(navigator.onLine ? 'Nouveau brouillon créé. Vérifiez les quantités avant confirmation.' : 'Brouillon créé hors ligne; il sera synchronisé lorsque la connexion sera rétablie.')
+        onReuseConsumed()
+      } catch (reason) {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Le repas n’a pas pu être repris.')
+      }
+    }
+    void run()
+    return () => { cancelled = true }
+  }, [reuseRequest, loading, date, timeZone, onReuseConsumed])
+
+  async function attachPhoto(file: File | undefined, input: HTMLInputElement) {
+    input.value = ''
     if (!file) return
+    const requestKey = cacheKey
+    setError('')
     try {
-      commit({ ...cacheRef.current, photoDataUrl: await compressPhoto(file) })
-      setSyncMessage(!navigator.onLine && storageErrorRef.current ? 'La photo est uniquement en mémoire : le stockage local a échoué et elle sera perdue à la fermeture.' : 'Photo jointe à la copie locale. Son analyse n’est pas disponible dans ce lot.')
-    } catch { setError('Cette photo n’a pas pu être préparée sur cet appareil.') }
+      const photoDataUrl = await compressPhoto(file)
+      const latest = cacheRefKey.current === requestKey ? cacheRef.current : readJournalCache(localStorage, requestKey)
+      if (!latest) return
+      commitForKey(requestKey, { ...latest, photoDataUrl })
+      setMessageForKey(requestKey, !navigator.onLine && storageErrorRef.current ? 'La photo est uniquement en mémoire : le stockage local a échoué et elle sera perdue à la fermeture.' : 'Photo jointe à la copie locale. Son analyse n’est pas disponible dans ce lot.')
+    } catch {
+      if (activeCacheKey.current === requestKey) setError('Cette photo n’a pas pu être préparée sur cet appareil.')
+    }
   }
 
 
@@ -315,7 +376,7 @@ export default function Journal({ userId }: { readonly userId: string }) {
         {sections.map((item) => <div className="journal-total" key={item.code}><small>{item.label}</small><strong>{formatTotal(totals[item.code], item.unit)}</strong><span>{item.unit}</span></div>)}
       </section>
       <section className="journal-meals-section">
-        <div className="journal-section-heading"><div><small>MES REPAS</small><h2>{cache.day?.meals.length ?? 0} brouillon(s) · {activeSnapshots.length} confirmé(s)</h2></div><div className="journal-secondary-actions"><label className="journal-photo-button">Joindre une photo<input type="file" accept="image/*" capture="environment" onChange={(event) => void attachPhoto(event.currentTarget.files?.[0])}/></label><button type="button" className="journal-primary" onClick={() => { setNewMealTime(localDateTimeInput(new Date(date + 'T12:00:00'))); setAddingMeal(true) }}>+ Ajouter un repas</button></div></div>
+        <div className="journal-section-heading"><div><small>MES REPAS</small><h2>{cache.day?.meals.length ?? 0} brouillon(s) · {activeSnapshots.length} confirmé(s)</h2></div><div className="journal-secondary-actions"><label className="journal-photo-button">Prendre une photo<input type="file" accept="image/*" capture="environment" aria-label="Prendre une photo avec l’appareil photo" onChange={(event) => void attachPhoto(event.currentTarget.files?.[0], event.currentTarget)}/></label><label className="journal-photo-button">Choisir dans la galerie / fichiers<input type="file" accept="image/*" aria-label="Choisir une photo dans la galerie ou les fichiers" onChange={(event) => void attachPhoto(event.currentTarget.files?.[0], event.currentTarget)}/></label><button type="button" className="journal-primary" onClick={() => { setNewMealTime(localDateTimeInput(new Date(date + 'T12:00:00'))); setAddingMeal(true) }}>+ Ajouter un repas</button></div></div>
         {cache.day?.meals.map((meal) => <article className="journal-meal" key={meal.id}>
           <div className="journal-meal-header">
             <div className="journal-meal-kind"><span className="meal-dot"/><select aria-label="Catégorie du repas" value={meal.kind} onChange={(event) => mutate((current) => updateMealDetails(current, cache.day!.id, meal.id, { kind: event.target.value as MealKind }))}>{Object.entries(mealLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
@@ -325,9 +386,9 @@ export default function Journal({ userId }: { readonly userId: string }) {
           </div>
           {meal.items.length === 0 ? <p className="journal-empty-meal">Ajoutez un aliment pour calculer les apports de ce repas.</p> :
             <div className="journal-items">{meal.items.map((item) => item.kind === 'food' ? <article className="journal-food" key={item.id}>
-              <div className="journal-food-name"><b>{cache.sources[item.foodId]?.description ?? item.foodId}</b><small>{cache.sources[item.foodId]?.dataType ?? 'Source USDA'}</small></div>
+              <div className="journal-food-name"><b>{item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? item.foodId}</b><small>{item.pinnedFoodSnapshot?.dataType ?? cache.sources[item.foodId]?.dataType ?? 'Source USDA'}</small></div>
               <QuantityInput itemId={item.id} mealId={meal.id} quantity={item.quantity} onChange={(quantity) => mutate((current) => setFoodJournalItemQuantity(current, cache.day!.id, meal.id, item.id, quantity))}/>
-              <button type="button" className="journal-link danger" aria-label={`Retirer ${cache.sources[item.foodId]?.description ?? 'cet aliment'}`} onClick={() => mutate((current) => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer</button>
+              <button type="button" className="journal-link danger" aria-label={`Retirer ${item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? 'cet aliment'}`} onClick={() => mutate((current) => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer</button>
             </article> : <article className="journal-food" key={item.id}><div className="journal-food-name"><b>{item.recipeSnapshot.recipe.name}</b><small>Recette confirmée</small></div><span>{item.quantity.amount} {item.quantity.kind === 'servings' ? 'portion(s)' : 'g'}</span></article>)}</div>}
           <div className="journal-meal-totals"><b>Apports de ce repas</b>{sections.map(({code,label,unit})=><span key={code}>{label} <strong>{formatTotal(calculateMealTotal(state, cache.day?.id, meal.id, sources, code), unit)}</strong></span>)}</div>
           {addingFoodTo === meal.id ? <FoodPicker onCancel={() => setAddingFoodTo(null)} onSelect={(food, quantity) => addSelectedFood(meal.id, food, quantity)}/> :
@@ -393,7 +454,7 @@ function FoodPicker({ onCancel, onSelect }: { readonly onCancel: () => void; rea
     if (query.trim().length < 2) { setError('Saisissez au moins deux caractères.'); return }
     setBusy(true); setError('')
     try {
-      const response = await fetch(`/api/foods/search?q=${encodeURIComponent(query.trim())}&page=${requestedPage}&pageSize=25`, { cache: 'no-store' })
+      const response = await requestFoodCatalog(`/api/foods/search?q=${encodeURIComponent(query.trim())}&page=${requestedPage}&pageSize=25`)
       if (!response.ok) throw new Error('La recherche USDA est indisponible.')
       const data = await response.json() as SearchResult
       setFoods(data.foods); setPage(data.currentPage); setTotalPages(data.totalPages); setDetail(null)
@@ -403,9 +464,10 @@ function FoodPicker({ onCancel, onSelect }: { readonly onCancel: () => void; rea
   async function choose(food: SearchFood) {
     setBusy(true); setError('')
     try {
-      const response = await fetch(`/api/foods/${food.fdcId}`, { cache: 'no-store' })
+      const response = await requestFoodCatalog(`/api/foods/${food.fdcId}`)
       if (!response.ok) throw new Error('La fiche USDA est indisponible.')
-      const snapshot = usdaDetailToFoodSnapshot(await response.json() as FoodDetail)
+      const snapshot = uiFixtureMode ? getFixtureFoodSource(`usda:${food.fdcId}`) : usdaDetailToFoodSnapshot(await response.json() as FoodDetail)
+      if (!snapshot) throw new Error('La fiche synthétique est introuvable.')
       setDetail(snapshot)
       const basis = snapshot.nutrients.find((datum) => datum.status === 'reported')?.basis
       if (basis) { setAmount(basis.amount); setUnit(basis.unit) }
