@@ -19,9 +19,9 @@ export default function PhotoAnalysis({ photo, storageKey, onDraft }: { photo: s
     if(!navigator.onLine){setSaved(s=>({...s,pending:true}));setError('Demande conservée hors connexion. Relancez explicitement après reconnexion.');return}
     setBusy(true);setError('');const id=createUuidV4();setSaved(s=>({...s,id,pending:true}))
     try{
-      const r=await requestPrivateJson<{proposal:unknown}>('/api/private/photo-analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,photo})})
+      const r=await requestPrivateJson<{proposal:unknown;expiresAt?:string}>('/api/private/photo-analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,photo})})
       const p=parsePhotoProposal(r.proposal)
-      if(alive.current)setSaved(s=>({...s,rows:p.items,warning:p.warning,pending:false}))
+      if(alive.current){const expires=r.expiresAt?Date.parse(r.expiresAt):Date.now()+30*86400000;localStorage.setItem('nutrip-photo-expiry:'+storageKey.replace('nutrip-photo-v1:',''),String(expires));setSaved(s=>({...s,rows:p.items,warning:p.warning,pending:false,expires}))}
     }catch(e){if(alive.current)setError(e instanceof Error?e.message:'Analyse indisponible.')}
     finally{if(alive.current){setBusy(false);void requestPrivateJson<{reservedDh:number;requests:number}>('/api/private/photo-analysis/usage').then(u=>setUsage(`${u.requests} tentative(s), ${u.reservedDh} DH réservés ce mois sur 50 DH.`)).catch(()=>{})}}
   }

@@ -95,3 +95,13 @@
 @media(max-width:1000px){.journal-totals{grid-template-columns:repeat(3,minmax(0,1fr))}.journal-total-intro{grid-column:span 3}}
 @media(max-width:680px){.journal-page{padding:28px 16px 58px}.journal-heading{align-items:start;flex-direction:column}.journal-date{width:100%}.journal-date input{width:100%;box-sizing:border-box}.journal-section-heading{align-items:stretch;flex-direction:column}.journal-secondary-actions{display:grid;grid-template-columns:1fr 1fr}.journal-totals{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:26px}.journal-total-intro{grid-column:span 2}.journal-meal{padding:14px}.journal-meal-header{align-items:stretch;flex-wrap:wrap}.journal-meal-kind{min-width:100%;}.meal-time,.meal-name{flex:1}.journal-meal-header>.journal-link{margin-left:auto}.journal-food{grid-template-columns:1fr auto;gap:8px}.journal-food-name{grid-column:1/-1}.journal-food>.journal-link{justify-self:end}.journal-quantity{justify-content:flex-start}.journal-meal-totals{gap:10px}.journal-meal-totals>b{width:100%}.journal-food-picker>form{align-items:stretch;flex-wrap:wrap}.journal-food-picker>form label{min-width:100%}.journal-search-results{grid-template-columns:1fr}.journal-food-detail{align-items:stretch}.journal-food-detail>div{flex-basis:100%}.journal-new-meal{grid-template-columns:1fr}.journal-new-meal h3,.journal-new-meal>div{grid-column:auto}.journal-photo-button{display:grid;place-items:center;text-align:center;padding:8px}.journal-photo-button input{font-size:0}}
 @media(prefers-reduced-motion:reduce){.sync-spinner{animation:none}}
+
+/* Photo proposals are editable suggestions, never journal meal cards. */
+.photo-analysis { background: #fff; margin-block: 1rem; min-width: 0; }
+.photo-analysis > p { line-height: 1.6; overflow-wrap: anywhere; }
+.photo-analysis button, .private-photos button { min-height: 44px; padding: .6rem .8rem; margin: .25rem; border: 1px solid #cbd9cd; border-radius: .55rem; background: #f5f8f3; color: #315a4c; font: inherit; cursor: pointer; max-width: 100%; white-space: normal; }
+.photo-analysis button:disabled { opacity: .5; cursor: default; }
+.photo-analysis button:focus-visible, .private-photos button:focus-visible { outline: 2px solid #315a4c; outline-offset: 2px; }
+.photo-analysis label { display: inline-flex; flex-direction: column; gap: .35rem; margin: .4rem; max-width: 100%; }
+.photo-analysis input, .photo-analysis select { max-width: 100%; box-sizing: border-box; min-height: 44px; }
+@media(max-width: 600px) { .photo-analysis { padding: .75rem; } .photo-analysis label { display: flex; } .photo-analysis button { width: calc(100% - .5rem); } }
