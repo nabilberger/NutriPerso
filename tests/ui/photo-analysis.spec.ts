@@ -5,7 +5,7 @@ async function setup(page:Page,mobile:boolean){
  await page.getByLabel('Choisir une photo dans la galerie ou les fichiers').setInputFiles({name:'repas.png',mimeType:'image/png',buffer:Buffer.from(data,'base64')})
  await expect(page.getByRole('button',{name:'Analyser la photo',exact:true})).toBeVisible()
 }
-test('photo proposal → correction → source → draft → explicit confirmation',async({page,isMobile})=>{
+test('photo proposal → correction → source → draft → explicit confirmation',async({page,isMobile},info)=>{
  await setup(page,isMobile)
  const section=page.getByRole('region',{name:'Analyse photographique'})
  await section.getByRole('button',{name:'Analyser la photo',exact:true}).click()
@@ -18,6 +18,7 @@ test('photo proposal → correction → source → draft → explicit confirmati
  await section.getByRole('button',{name:'Rechercher',exact:true}).click()
  await section.getByRole('button',{name:/Pois chiches.*Fixture/}).first().click()
  await section.getByRole('button',{name:'Retenir cette fiche'}).click()
+ await page.screenshot({path:info.outputPath('photo-proposition.png'),fullPage:true})
  await section.getByRole('button',{name:'Créer un brouillon avec ces aliments'}).click()
  const draft=page.locator('.journal-meal').filter({has:page.locator('input[value="Depuis une photo"]')})
  await expect(draft).toHaveCount(1);await expect(draft.locator('input[value="234"]')).toHaveCount(1)
@@ -25,6 +26,7 @@ test('photo proposal → correction → source → draft → explicit confirmati
  const before=await page.locator('.journal-confirmed').count()
  await draft.getByRole('button',{name:'Confirmer ce repas'}).click()
  await expect(page.locator('.journal-confirmed')).toHaveCount(before+1)
+ await page.screenshot({path:info.outputPath('photo-confirmation.png'),fullPage:true})
 })
 test('proposal refusal never creates a draft; remote photo deletion independent',async({page,isMobile})=>{
  await setup(page,isMobile);const count=await page.locator('.journal-confirmed').count()

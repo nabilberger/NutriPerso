@@ -27,7 +27,7 @@ export default function PhotoAnalysis({ photo, storageKey, onDraft }: { photo: s
   }
   async function remove(){if(!saved.id)return;setBusy(true);try{await requestPrivateJson('/api/private/photos/'+saved.id,{method:'DELETE'});setSaved(s=>({...s,id:null}));setError('Photo distante supprimée. Les repas restent inchangés.')}catch{setError('Suppression impossible, réessayez.')}finally{setBusy(false)}}
   function update(index:number,patch:Partial<Row>){setSaved(s=>({...s,rows:s.rows.map((r,i)=>i===index?{...r,...patch}:r)}))}
-  return <section className="journal-meal" aria-label="Analyse photographique">
+  return <section className="journal-food-picker photo-analysis" aria-label="Analyse photographique">
     <h2>Proposition depuis la photo</h2><p>Estimations visuelles à vérifier. Aucun repas ne sera confirmé automatiquement. La photo est envoyée à Gemini et conservée en privé pendant 30 jours au maximum.</p>
     <button disabled={busy} onClick={()=>void analyze()}>{busy?'Analyse en cours…':saved.pending?'Relancer l’analyse en attente':'Analyser la photo'}</button>
     {saved.pending&&<button disabled={busy} onClick={()=>setSaved(s=>({...s,pending:false}))}>Annuler la demande</button>}
