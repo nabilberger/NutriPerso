@@ -87,6 +87,45 @@ export function resolveJournalCacheConflict(
   }
 }
 
+/** Rebase edits made during a successful POST onto the acknowledged server day.
+ * This is not conflict resolution: serverRevision is known and only the local
+ * delta since the request was sent is replayed. Historical snapshots stay intact.
+ */
+export function acknowledgeJournalAction(
+  sent: JournalCacheRecord,
+  latest: JournalCacheRecord,
+  result: { readonly day: JournalDayDraft; readonly snapshot: ConfirmedMealSnapshot },
+): JournalCacheRecord {
+  const { day: serverDay, snapshot } = result
+  const meals = new Map(serverDay.meals.map((meal) => [meal.id, meal]))
+  const before = new Map(sent.day?.meals.map((meal) => [meal.id, meal]) ?? [])
+  const current = new Map(latest.day?.meals.map((meal) => [meal.id, meal]) ?? [])
+  for (const id of before.keys()) if (!current.has(id)) meals.delete(id)
+  for (const [id, meal] of current) {
+    if (JSON.stringify(meal) === JSON.stringify(before.get(id))) continue
+    if (id === snapshot.logicalMealId) {
+      // A confirmed deletion must never be resurrected by an old local edit.
+      if (snapshot.status === 'void') continue
+      // Edits to the meal being confirmed remain an explicit correction draft.
+      meals.set(id, { ...meal, supersedesSnapshotId: snapshot.snapshotId,
+        revision: Math.max(meal.revision, snapshot.mealRevision + 1) })
+    } else meals.set(id, meal)
+  }
+  const nextMeals = [...meals.values()].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
+  const dirty = JSON.stringify(nextMeals) !== JSON.stringify([...serverDay.meals]
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)))
+  const day = dirty ? { ...serverDay, meals: nextMeals,
+    revision: Math.max(latest.day?.revision ?? 0, serverDay.revision) + 1 } : serverDay
+  return {
+    ...latest, day, serverRevision: serverDay.revision, dirty,
+    snapshots: [...latest.snapshots.filter((item) => item.snapshotId !== snapshot.snapshotId), snapshot],
+    pendingConfirm: latest.pendingConfirm?.snapshotId === snapshot.snapshotId
+      || (snapshot.status === 'void' && latest.pendingConfirm?.mealId === snapshot.logicalMealId)
+      ? null : latest.pendingConfirm,
+    pendingCancels: latest.pendingCancels.filter((pending) => pending.newSnapshotId !== snapshot.snapshotId),
+  }
+}
+
 /** Persist an async result under its originating date, never in another date's view. */
 export function persistJournalCacheForKey(
   storage: JournalStorage,
