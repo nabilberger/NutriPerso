@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { shouldEnableUiFixtures } from '../../src/ui-fixture-mode.ts'
+import { calculateFoodSnapshot } from '../../src/domain/nutrition/recipes.ts'
 import {
   calculateJournalDay, createMealCorrectionDraft, selectActiveMealSnapshots, setFoodJournalItemQuantity,
   type ConfirmedMealSnapshot, type JournalDayDraft,
 } from '../../src/domain/nutrition/journal.ts'
+import { NUTRIENT_CODES } from '../../src/domain/nutrition/types.ts'
 import { buildMealReuseDraft, type MealReuseDTO } from '../../src/meal-reuse.ts'
 import { createUuidV4 } from '../../src/secure-uuid.ts'
 import type { ConfirmedRecipeSnapshot } from '../../src/domain/nutrition/recipe-snapshot.ts'
-import { fixtureRequest } from '../../src/dev-ui-fixtures.ts'
+import { fixtureRequest, getFixtureFoodSource } from '../../src/dev-ui-fixtures.ts'
 import { missingWorkerVars } from '../../scripts/dev-stack-config.mjs'
 test('fixtures require development and explicit opt-in; production stays disabled',()=>{
  assert.equal(shouldEnableUiFixtures(false,'1'),false)
@@ -39,6 +41,17 @@ test('unmapped fixture routes fail locally without a network fallback',async()=>
 test('connected local startup checks required variable names without printing or parsing their values',()=>{
  assert.deepEqual(missingWorkerVars(''),['SUPABASE_URL','SUPABASE_PUBLISHABLE_KEY','SUPABASE_SECRET_KEY','FDC_API_KEY'])
  assert.deepEqual(missingWorkerVars('SUPABASE_URL=https://local.invalid\nSUPABASE_PUBLISHABLE_KEY=public\nSUPABASE_SECRET_KEY=private\nFDC_API_KEY=local'),[])
+})
+
+test('incomplete synthetic fixture keeps unreported nutrients unknown', () => {
+  const food = getFixtureFoodSource('usda:90002')
+  assert.ok(food)
+  const calculation = calculateFoodSnapshot(food, { kind: 'physical', amount: '100', unit: 'g', weightNature: 'edible' })
+  assert.equal(calculation.contributions.protein?.status, 'complete')
+  assert.equal(calculation.contributions.carbohydrate?.status, 'complete')
+  assert.equal(calculation.contributions.energy?.status, 'unknown')
+  assert.equal(calculation.contributions.fat?.status, 'unknown')
+  assert.equal(calculation.contributions.fiber?.status, 'unknown')
 })
 
 function asReuseDto(snapshot: ConfirmedMealSnapshot): MealReuseDTO {
@@ -93,7 +106,7 @@ test('fixture adapter runs reuse → confirmation → correction → confirmatio
   const foodItem = correctionMeal.items.find((item) => item.kind === 'food')
   assert.ok(foodItem?.kind === 'food')
   correctionState = setFoodJournalItemQuantity(correctionState, correctionState.days[0]!.id, correctionMeal.id, foodItem.id,
-    { ...foodItem.quantity, amount: '200' })
+    { ...foodItem.quantity, amount: '234' })
   const correctionDay = correctionState.days[0]!
   const savedCorrection = await saveFixtureDraft(correctionDay, afterFirst.journal.day.revision)
   const corrected = await confirmFixtureDraft(savedCorrection, createUuidV4())
@@ -102,6 +115,12 @@ test('fixture adapter runs reuse → confirmation → correction → confirmatio
   assert.deepEqual(first, originalCopy)
   assert.equal((await activeFor(first.logicalMealId)).length, 1)
   assert.notDeepEqual(corrected.totals.protein, first.totals.protein)
+  const correctedNutrientValues = NUTRIENT_CODES.map((code) => {
+    const total = corrected.totals[code]
+    assert.equal(total?.status, 'complete', `${code} should be available in the complete synthetic fixture`)
+    return total?.status === 'complete' ? total.value : null
+  })
+  assert.deepEqual(correctedNutrientValues, ['394.760000', '25.276000', '22.720000', '7.384000', '21.584000'])
   const afterCorrection = await fixtureRequest<{ journal: { day: JournalDayDraft; snapshots: ConfirmedMealSnapshot[] } }>(`/api/private/journal?date=${today}`)
   const correctedDaily = calculateJournalDay({ days: [afterCorrection.journal.day], snapshots: afterCorrection.journal.snapshots }, afterCorrection.journal.day.id).protein
   assert.ok(correctedDaily)
