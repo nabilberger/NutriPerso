@@ -62,3 +62,15 @@ Les ingrédients USDA et ceux du catalogue local/personnel existant sont utilisa
 L'édition/création de fiches alimentaires et des équivalences alimentaires reste à
 réaliser au titre du §3.3 ; cette livraison ne clôt pas à elle seule #5 ni la V1.
 État de déploiement : aucun nouveau Worker/Pages ni aucune migration distante appliqués.
+
+## Mission 012 — complément catalogue personnel
+
+Le complément de #5 fournit les fiches personnelles (création, consultation, édition,
+archivage), cinq valeurs de référence avec unités et base 100 g/ml, équivalences
+alimentaires versionnées et sélection dans le journal/les recettes. Les algorithmes
+nutritionnels sont inchangés. Voir `CATALOGUE_PERSONNEL.md` pour couverture, migration
+versionnée et conditions legacy. Tests de domaines, API simulée, PostgreSQL réel
+isolé (concurrence et rollback inclus) et navigateur ordinateur/mobile émulé.
+Cette livraison complète la couverture de code de #5 ; CI exacte dans la PR.
+Aucun déploiement, migration distante ou validation Android physique n'est revendiqué.
+Le ticket reste ouvert pour revue de supervision et validation de l'intégration.

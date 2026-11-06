@@ -1,3 +1,7 @@
+import FoodQuantityEditor from './FoodQuantityEditor'
+import { LocalCatalog } from './LocalFoodPicker'
+import { formatTotal } from './nutrition-presentation'
+export { formatTotal } from './nutrition-presentation'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   addFoodJournalItem, calculateJournalDayPreview, calculateJournalMeal, cancelConfirmedMeal,
@@ -14,10 +18,10 @@ import { createUuidV4 } from './secure-uuid.ts'
 import { uiFixtureMode } from './ui-fixture-mode'
 import { getFixtureFoodSource } from './dev-ui-fixtures'
 import { requestFoodCatalog } from './catalog-client'
-import { decimalToFraction, fractionToDecimal, parseDecimal } from './domain/nutrition/decimal.ts'
+import { decimalToFraction, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { requestPrivateJson } from './auth/client'
-import { loadFoodSources } from './journal-sources.ts'
+import { loadFoodSources, mergeLoadedFoodSources } from './journal-sources.ts'
 import './journal.css'
 import { acknowledgeJournalAction, emptyJournalCache, journalCacheKey, persistJournalCacheForKey, readJournalCache, resolveJournalCacheConflict, writeJournalCache, type JournalCacheRecord, type PendingJournalCancel } from './journal-cache.ts'
 
@@ -180,12 +184,13 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
         } else if (local.dirty || local.pendingConfirm || local.pendingCancels.length) {
           const restored = { ...local, ...(journal ? { snapshots: journal.snapshots } : {}) }
           cacheRef.current = restored; cacheRefKey.current = cacheKey; setCache(restored); setSyncMessage('Reprise des opérations locales en attente.')
+          if(restored.day)void loadFoodSources(restored.day,restored.sources,()=>active).then(sources=>{if(active)commit({...cacheRef.current,sources:mergeLoadedFoodSources(restored.sources,cacheRef.current.sources,sources)})})
         } else if (journal) {
           const restored = { ...emptyJournalCache(), day: journal.day, snapshots: journal.snapshots, serverRevision: journal.day.revision,
             sources: local.sources, photoDataUrl: local.photoDataUrl }
           cacheRef.current = restored; cacheRefKey.current = cacheKey; setCache(restored); setSyncMessage('Journal chargé depuis Supabase.')
           void loadFoodSources(journal.day, restored.sources, () => active).then((sources) => {
-            if (active) commit({ ...cacheRef.current, sources })
+            if (active) commit({ ...cacheRef.current, sources:mergeLoadedFoodSources(restored.sources,cacheRef.current.sources,sources) })
           })
         } else {
           const fresh = { ...emptyJournalCache(), sources: local.sources, photoDataUrl: local.photoDataUrl }
@@ -391,7 +396,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
           {meal.items.length === 0 ? <p className="journal-empty-meal">Ajoutez un aliment pour calculer les apports de ce repas.</p> :
             <div className="journal-items">{meal.items.map((item) => item.kind === 'food' ? <article className="journal-food" key={item.id}>
               <div className="journal-food-name"><b>{item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? item.foodId}</b><small>{item.pinnedFoodSnapshot?.dataType ?? cache.sources[item.foodId]?.dataType ?? 'Source USDA'}</small></div>
-              <QuantityInput itemId={item.id} mealId={meal.id} quantity={item.quantity} onChange={(quantity) => mutate((current) => setFoodJournalItemQuantity(current, cache.day!.id, meal.id, item.id, quantity))}/>
+              <FoodQuantityEditor food={item.pinnedFoodSnapshot ?? cache.sources[item.foodId]} quantity={item.quantity} onChange={(quantity) => mutate((current) => setFoodJournalItemQuantity(current, cache.day!.id, meal.id, item.id, quantity))}/>
               <button type="button" className="journal-link danger" aria-label={`Retirer ${item.pinnedFoodSnapshot?.description ?? cache.sources[item.foodId]?.description ?? 'cet aliment'}`} onClick={() => mutate((current) => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer</button>
             </article> : <article className="journal-food" key={item.id}><div className="journal-food-name"><b>{item.recipeSnapshot.recipe.name}</b><small>Recette confirmée</small></div><RecipeQuantityInput quantity={item.quantity} allowWeight={item.recipeSnapshot.recipe.finalWeight !== null} onChange={quantity => mutate(current => setRecipeJournalItemQuantity(current, cache.day!.id, meal.id, item.id, quantity))}/><button type="button" className="journal-link danger" onClick={() => mutate(current => removeJournalItem(current, cache.day!.id, meal.id, item.id))}>Retirer la recette</button></article>)}</div>}
           <div className="journal-meal-totals"><b>Apports de ce repas</b>{sections.map(({code,label,unit})=><span key={code}>{label} <strong>{formatTotal(calculateMealTotal(state, cache.day?.id, meal.id, sources, code), unit)}</strong></span>)}</div>
@@ -410,7 +415,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
           <div className="journal-meal-header"><div className="journal-meal-kind"><span className="meal-dot confirmed-dot"/><b>{mealLabels[snapshot.mealKind]} · confirmé</b></div><span className="confirmed-time">{instantToLabel(snapshot.occurredAt)}</span>
             <button type="button" className="journal-link" disabled={cache.dirty || syncing} onClick={() => startCorrection(snapshot)}>Corriger</button>
             <button type="button" className="journal-link danger" disabled={syncing} onClick={() => requestCancel(snapshot)}>Supprimer</button></div>
-          <div className="journal-confirmed-items">{snapshot.items.map((item) => <span key={item.id}>{item.kind === 'food' ? item.foodSnapshot.description : item.recipeSnapshot.recipe.name}{item.kind === 'food' ? ` · ${item.enteredQuantity.amount} ${item.enteredQuantity.unit}` : ''}</span>)}</div>
+          <div className="journal-confirmed-items">{snapshot.items.map((item) => <span key={item.id}>{item.kind === 'food' ? item.foodSnapshot.description : item.recipeSnapshot.recipe.name}{item.kind === 'food' ? ` · ${item.enteredQuantity.amount} ${item.enteredQuantity.kind==='serving'?(item.foodSnapshot.portionEquivalences.find(p=>item.enteredQuantity.kind==='serving'&&p.id===item.enteredQuantity.equivalenceId)?.label??item.enteredQuantity.unit):item.enteredQuantity.unit}` : ''}</span>)}</div>
           <div className="journal-meal-totals"><b>Apports confirmés</b>{sections.map(({code,label,unit})=><span key={code}>{label} <strong>{formatTotal(snapshot.status === 'confirmed' ? snapshot.totals[code] : undefined, unit)}</strong></span>)}</div>
           {cache.pendingCancels.some((pending) => pending.snapshotId === snapshot.snapshotId) && <div className="journal-pending-confirm">Annulation en attente de synchronisation.</div>}
         </article>)}
@@ -420,29 +425,6 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
   </div>
 }
 
-function QuantityInput({ itemId, mealId, quantity, onChange }: { readonly itemId: string; readonly mealId: string; readonly quantity: FoodQuantityInput; readonly onChange: (value: FoodQuantityInput) => void }) {
-  const [amount, setAmount] = useState(quantity.amount)
-  useEffect(() => setAmount(quantity.amount), [quantity.amount])
-  const isMass = quantity.kind === 'physical' && (quantity.unit === 'g' || quantity.unit === 'kg')
-  function changeAmount(value: string) {
-    setAmount(value)
-    const normalized = value.replace(',', '.')
-    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(normalized)) return
-    try {
-      if (decimalToFraction(parseDecimal(normalized)).numerator <= 0n) return
-      onChange({ ...quantity, amount: normalized })
-    } catch { /* Keep the edited text local until it becomes a valid exact decimal. */ }
-  }
-  return <div className="journal-quantity" data-item={itemId} data-meal={mealId}>
-    <label>Quantité<input type="text" inputMode="decimal" value={amount} onChange={(event) => changeAmount(event.target.value)} onBlur={() => setAmount(quantity.amount)} aria-label="Quantité consommée"/></label>
-    {quantity.kind === 'physical' && <label>Unité<select value={quantity.unit} onChange={(event) => {
-      const unit = event.target.value
-      if (unit === 'g') onChange({ kind: 'physical', amount, unit: 'g', weightNature: 'edible' })
-      else onChange({ kind: 'physical', amount, unit: 'ml', weightNature: 'not-applicable' })
-    }}><option value="g">g</option><option value="ml">ml</option></select></label>}
-    {isMass && quantity.kind === 'physical' && <label>Poids<select value={quantity.weightNature} onChange={(event) => onChange({ ...quantity, weightNature: event.target.value as 'edible' | 'gross' | 'unknown' })}><option value="edible">Comestible</option><option value="gross">Brut</option><option value="unknown">Inconnu</option></select></label>}
-  </div>
-}
 function RecipeQuantityInput({ quantity, allowWeight, onChange }: { quantity: import('./domain/nutrition/journal').RecipeJournalQuantity; allowWeight: boolean; onChange: (quantity: import('./domain/nutrition/journal').RecipeJournalQuantity) => void }) {
   const [amount, setAmount] = useState(quantity.amount)
   useEffect(() => setAmount(quantity.amount), [quantity.amount])
@@ -451,7 +433,8 @@ function RecipeQuantityInput({ quantity, allowWeight, onChange }: { quantity: im
     try { const normalized = e.target.value.replace(',', '.'); if (decimalToFraction(parseDecimal(normalized)).numerator > 0n) onChange({ ...quantity, amount: normalized }) } catch { /* Keep incomplete input until blur. */ }
   }} onBlur={() => setAmount(quantity.amount)}/></label>{allowWeight && <label>Mesure de recette<select value={quantity.kind} onChange={e => onChange(e.target.value === 'servings' ? { kind: 'servings', amount: quantity.amount } : { kind: 'weight', amount: quantity.amount, unit: 'g', weightNature: 'edible' })}><option value="servings">Portions</option><option value="weight">Grammes</option></select></label>}</div>
 }
-export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas' }: { addLabel?: string; readonly onCancel: () => void; readonly onSelect: (food: FoodNutritionSnapshot, quantity: FoodQuantityInput) => void }) {
+export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas', allowCatalog = true }: { allowCatalog?: boolean; addLabel?: string; readonly onCancel: () => void; readonly onSelect: (food: FoodNutritionSnapshot, quantity: FoodQuantityInput) => void }) {
+  const [source,setSource]=useState('usda')
   const [query, setQuery] = useState('')
   const [foods, setFoods] = useState<readonly SearchFood[]>([])
   const [detail, setDetail] = useState<FoodNutritionSnapshot | null>(null)
@@ -497,27 +480,20 @@ export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas' }
     onSelect(detail, quantity)
   }
   return <section className="journal-food-picker" aria-label="Rechercher un aliment">
+    {allowCatalog && <label>Source des aliments<select aria-label="Source des aliments" value={source} onChange={e=>setSource(e.target.value)}><option value="usda">USDA</option><option value="catalog">Catalogue local / personnel</option></select></label>}
+    {source==='catalog'?<LocalCatalog onClose={onCancel} onSelect={onSelect}/>:<>
     <form onSubmit={(event) => { event.preventDefault(); void loadPage(1) }}><label>Rechercher dans FoodData Central<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ex. lentilles, œuf, poulet…" autoFocus/></label><button className="journal-primary" disabled={busy}>{busy ? 'Recherche…' : 'Rechercher'}</button><button type="button" className="journal-link" onClick={onCancel}>Fermer</button></form>
     {error && <p role="alert" className="journal-error">{error}</p>}
     {foods.length > 0 && <div className="journal-search-results" aria-busy={busy}>{foods.map((food) => <button type="button" key={food.fdcId} onClick={() => void choose(food)} disabled={busy}><b>{food.description}</b><small>{food.brandOwner ?? food.dataType ?? 'USDA'}</small></button>)}</div>}
     {totalPages > 1 && <div className="journal-pagination"><button type="button" disabled={page <= 1 || busy} onClick={() => void loadPage(page - 1)}>Précédent</button><span>Page {page} sur {totalPages}</span><button type="button" disabled={page >= totalPages || busy} onClick={() => void loadPage(page + 1)}>Suivant</button></div>}
     {detail && <form className="journal-food-detail" onSubmit={add}><div><b>{detail.description}</b><small>{detail.dataType ?? 'USDA'} · {detail.fdcId}</small></div><label>Quantité<input type="text" inputMode="decimal" required value={amount} onChange={(event) => setAmount(event.target.value)}/></label><label>Unité<select value={unit} onChange={(event) => { const next = event.target.value as 'g' | 'ml'; setUnit(next); if (next === 'ml') setNature('edible') }}><option value="g">g</option><option value="ml">ml</option></select></label>{unit === 'g' && <label>Nature du poids<select value={nature} onChange={(event) => setNature(event.target.value as typeof nature)}><option value="edible">Comestible</option><option value="gross">Brut</option><option value="unknown">Inconnue</option></select></label>}<button className="journal-primary" type="submit">{addLabel}</button></form>}
+    </>}
   </section>
 }
 
 function calculateMealTotal(state: JournalState, dayId: string | undefined, mealId: string, sources: ReadonlyMap<string, FoodNutritionSnapshot>, code: DisplaySection): NutrientTotal | undefined {
   if (!dayId) return undefined
   try { return calculateJournalMeal(state, dayId, mealId, { foods: sources }).totals[code] } catch { return undefined }
-}
-export function formatTotal(total: NutrientTotal | undefined, unit: string): string {
-  if (!total) return 'Inconnu'
-  const scale = unit === 'kcal' ? 0 : 1
-  if (total.status === 'unknown') return 'Inconnu'
-  const fraction = total.status === 'complete' ? total.exactValue : total.exactKnownSubtotal
-  const value = fraction
-    ? fractionToDecimal({ numerator: BigInt(fraction.numerator), denominator: BigInt(fraction.denominator) }, scale)
-    : total.status === 'complete' ? total.value : total.knownSubtotal
-  return total.status === 'partial' ? `≥ ${value} ${unit} · partiel` : `${value} ${unit}`
 }
 function todayIn(timeZone: string): string {
   return new Intl.DateTimeFormat('fr-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())

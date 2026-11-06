@@ -1,3 +1,4 @@
+import PersonalFoods from './PersonalFoods'
 import { requestFoodCatalog } from './catalog-client'
 import {useState,type FormEvent} from 'react'
 import {LocalCatalog} from './IngredientPicker'
@@ -45,8 +46,8 @@ export function FoodExplorer(){
   }
   return <div className="data-page">
     <div className="data-heading"><small>CATALOGUE NUTRITIONNEL</small><h1>Explorez <em>vos aliments.</em></h1><p>Retrouvez les compositions nutritionnelles de référence dans FoodData Central.</p></div>
-    <label>Source du catalogue<select value={source} onChange={e=>setSource(e.target.value)}><option value="usda">USDA</option><option value="catalog">Local / personnel</option></select></label>
-    {source==='catalog'?<section className="data-card"><LocalCatalog/></section>:<>
+    <label>Source du catalogue<select value={source} onChange={e=>setSource(e.target.value)}><option value="usda">USDA</option><option value="catalog">Local / personnel</option><option value="personal">Mes fiches personnelles</option></select></label>
+    {source==='personal'?<PersonalFoods/>:source==='catalog'?<section className="data-card"><LocalCatalog/></section>:<>
     <form onSubmit={e=>void search(e)} className="food-search">
       <label htmlFor="food-q">Rechercher un aliment</label>
       <div><input id="food-q" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Ex. lentilles, sardines, poulet…"/><button type="submit" disabled={searching}>{searching?'Recherche…':'Rechercher'}</button></div>

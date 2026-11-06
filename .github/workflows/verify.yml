@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply and test all seven migrations on isolated PostgreSQL
+      - name: Apply and test all eight migrations on isolated PostgreSQL
         run: docker compose -p nutriperso-migrations-int -f docker-compose.migrations.yml up --abort-on-container-exit --exit-code-from test
       - name: Stop only the migration test stack
         if: always()

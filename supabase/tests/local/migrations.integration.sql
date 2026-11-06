@@ -1,4 +1,4 @@
-\echo 'Checking all seven migrations: schema, RLS, RPC permissions, and journal tombstones'
+\echo 'Checking all eight migrations: schema, RLS, RPC permissions, and journal tombstones'
 BEGIN;
 DO $test$
 DECLARE
@@ -25,6 +25,8 @@ BEGIN
     END IF;
   END LOOP;
   FOREACH signature IN ARRAY ARRAY[
+    'public.save_personal_food(uuid,uuid,bigint,jsonb)',
+    'public.archive_personal_food(uuid,uuid,bigint)',
     'public.save_recipe_draft(uuid,uuid,bigint,jsonb)',
     'public.append_recipe_snapshot(uuid,uuid,bigint,text,jsonb)',
     'public.save_journal_day_draft(uuid,uuid,bigint,jsonb)',
@@ -55,7 +57,7 @@ BEGIN
     OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='recipe_snapshots_immutable' AND NOT tgisinternal) THEN
     RAISE EXCEPTION 'Expected snapshot immutability triggers are missing';
   END IF;
-  RAISE NOTICE 'PASS: ten tables with RLS, five scoped RPCs, service-only rights, policies and immutable triggers';
+  RAISE NOTICE 'PASS: ten tables with RLS, seven scoped RPCs, service-only rights, policies and immutable triggers';
 END
 $test$;
 
