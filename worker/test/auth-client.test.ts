@@ -1,6 +1,19 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { SupabaseAuthClient, SupabaseAuthError } from '../../src/auth/supabase-auth.ts'
+import { readPrivateJsonResponse } from '../../src/auth/private-json-response.ts'
+
+test('successful Worker DELETE with HTTP 204 does not try to parse an absent JSON body', async () => {
+  assert.equal(await readPrivateJsonResponse<void>(new Response(null, { status: 204 })), undefined)
+  assert.equal(await readPrivateJsonResponse<void>(new Response(null, { status: 205 })), undefined)
+})
+
+test('Worker JSON decoding preserves successful data and meaningful API errors', async () => {
+  assert.deepEqual(await readPrivateJsonResponse(Response.json({ templates: [] })), { templates: [] })
+  await assert.rejects(readPrivateJsonResponse(Response.json({ error: { message: 'Modèle non supprimé.' } }, { status: 409 })), /Modèle non supprimé\./)
+  await assert.rejects(readPrivateJsonResponse(new Response('Unavailable', { status: 503 })), /HTTP 503/)
+  await assert.rejects(readPrivateJsonResponse(new Response('', { status: 200 })), SyntaxError)
+})
 
 const userId = '2fa33744-d81b-4403-9482-e6a7af550001'
 const config = { url: 'https://example.supabase.co', publishableKey: 'sb_publishable_test' }

@@ -1,0 +1,23 @@
+import type { ConfirmedMealSnapshot } from '../../src/domain/nutrition/journal.ts'
+
+export type MealHistoryFilter = { readonly query?: string; readonly from?: string; readonly to?: string }
+export function filterMealHistory(snapshots: readonly ConfirmedMealSnapshot[], filter: MealHistoryFilter): ConfirmedMealSnapshot[] {
+  const query = normalize(filter.query ?? '')
+  return snapshots.filter((snapshot) => snapshot.status === 'confirmed'
+    && (!filter.from || snapshot.localDate >= filter.from) && (!filter.to || snapshot.localDate <= filter.to)
+    && (!query || [snapshot.label ?? '', ...snapshot.items.map((item) => item.kind === 'food'
+      ? item.foodSnapshot.description : item.recipeSnapshot.recipe.name)].join(' ').normalize('NFD').split('').filter((character) => character.charCodeAt(0) < 0x0300 || character.charCodeAt(0) > 0x036f).join('').toLocaleLowerCase().includes(query)))
+    .sort((a, b) => b.localDate.localeCompare(a.localDate) || b.confirmedAt.localeCompare(a.confirmedAt))
+}
+export function paginateMealHistory(snapshots: readonly ConfirmedMealSnapshot[], offset: number, limit: number) {
+  const safeOffset = Math.max(0, Math.floor(offset))
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(limit)))
+  return { meals: snapshots.slice(safeOffset, safeOffset + safeLimit), total: snapshots.length, offset: safeOffset, limit: safeLimit }
+}
+
+function normalize(value: string): string {
+  return Array.from(value.normalize('NFD')).filter((character) => {
+    const code = character.codePointAt(0)!
+    return code < 0x0300 || code > 0x036f
+  }).join('').toLocaleLowerCase()
+}
