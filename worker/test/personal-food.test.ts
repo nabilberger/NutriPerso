@@ -1,4 +1,4 @@
-import {getPersonalFood} from '../src/personal-foods.ts'
+import {getPersonalFood,listPersonalFoods} from '../src/personal-foods.ts'
 import {PrivateApiError} from '../../src/auth/private-json-response.ts'
 import {loadFoodSources,mergeLoadedFoodSources} from '../../src/journal-sources.ts'
 import assert from 'node:assert/strict'
@@ -146,4 +146,14 @@ test('legacy personal sheets preserve exact decimal text and normalize existing 
  assert.equal(value?.nutrients.protein.value,'1.234567890123456789')
  assert.equal(value?.nutrients.protein.unit,'g')
  assert.equal(value?.nutrients.fiber.value,null)
+})
+
+test('personal management lists every page instead of silently truncating at 200 entries',async()=>{
+ const offsets:number[]=[]
+ const fetcher:typeof fetch=async input=>{
+  const offset=Number(new URL(String(input)).searchParams.get('offset'));offsets.push(offset)
+  return Response.json(Array.from({length:offset===0?200:1},(_,index)=>({id:'food-'+(offset+index),user_id:owner,revision:1,archived:false,description:'Food '+(offset+index)})))
+ }
+ const foods=await listPersonalFoods({SUPABASE_URL:'https://personal.test',SUPABASE_SECRET_KEY:'test'},owner,fetcher)
+ assert.equal(foods.length,201);assert.deepEqual(offsets,[0,200]);assert.equal(foods[200]!.name,'Food 200')
 })

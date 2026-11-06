@@ -20,9 +20,13 @@ async function api(env: SupabaseCatalogEnv, path: string, fetcher: typeof fetch,
 }
 const select = 'id,user_id,revision,archived,personal_document,description,category,source_reference,source_notes'
 export async function listPersonalFoods(env: SupabaseCatalogEnv, userId: string, fetcher: typeof fetch) {
-  const rows = await api(env, 'foods?select=' + select + '&source_type=eq.custom&user_id=eq.' + encodeURIComponent(userId) + '&order=updated_at.desc&limit=200', fetcher)
-  if (rows.some(r => r.user_id !== userId)) throw new PersonalFoodError('Réponse du catalogue invalide.', 502)
-  return rows.map(r => ({ id: r.id, name: r.description, revision: r.revision, archived: r.archived }))
+  const foods:Array<{id:string;name:string;revision:number;archived:boolean}>=[]
+  for(let offset=0;;offset+=200){
+    const rows=await api(env,'foods?select=id,user_id,revision,archived,description&source_type=eq.custom&user_id=eq.'+encodeURIComponent(userId)+'&order=updated_at.desc,id.asc&limit=200&offset='+offset,fetcher)
+    if(rows.some(r=>r.user_id!==userId))throw new PersonalFoodError('Réponse du catalogue invalide.',502)
+    foods.push(...rows.map(r=>({id:r.id,name:r.description,revision:r.revision,archived:r.archived})))
+    if(rows.length<200)return foods
+  }
 }
 export async function getPersonalFood(env: SupabaseCatalogEnv, userId: string, id: string, fetcher: typeof fetch): Promise<PersonalFood | null> {
   const rows = await api(env, 'foods?select=' + select + '&source_type=eq.custom&user_id=eq.' + encodeURIComponent(userId) + '&id=eq.' + encodeURIComponent(id), fetcher)
