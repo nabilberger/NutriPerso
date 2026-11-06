@@ -1,3 +1,4 @@
+import FoodQuantityEditor from './FoodQuantityEditor'
 import { useEffect, useRef, useState } from 'react'
 import { requestPrivateJson } from './auth/client'
 import { createUuidV4 } from './secure-uuid'
@@ -6,14 +7,10 @@ import IngredientPicker from './IngredientPicker'
 import { formatTotal } from './Journal'
 import { addRecipeIngredient, calculateRecipe, createRecipe, removeRecipeIngredient, setRecipeFinalWeight, updateRecipeIngredientQuantity,
   type FoodNutritionSnapshot, type RecipeDraft } from './domain/nutrition/recipes'
-import type { FoodQuantityInput } from './domain/nutrition/portions'
 import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot'
 import { selectCurrentRecipeSnapshot } from './meal-reuse'
 import './recipes.css'
 type Persisted = { draft: RecipeDraft; snapshots: ConfirmedRecipeSnapshot[] }
-function physicalQuantity(amount: string, unit: 'g' | 'kg' | 'ml' | 'l', nature: 'edible' | 'gross' | 'unknown' = 'edible'): FoodQuantityInput {
-  return unit === 'g' || unit === 'kg' ? { kind: 'physical', amount, unit, weightNature: nature } : { kind: 'physical', amount, unit, weightNature: 'not-applicable' }
-}
 const metrics = [['energy', 'Calories', 'kcal'], ['protein', 'Protéines', 'g'], ['carbohydrate', 'Glucides', 'g'], ['fat', 'Lipides', 'g'], ['fiber', 'Fibres', 'g']] as const
 export default function RecipeLibrary({ onUse }: { onUse: (snapshot: ConfirmedRecipeSnapshot) => void }) {
   const [recipes, setRecipes] = useState<RecipeDraft[]>([]), [loading, setLoading] = useState(true)
@@ -121,12 +118,7 @@ export default function RecipeLibrary({ onUse }: { onUse: (snapshot: ConfirmedRe
       <label>Poids final comestible (g), facultatif<input inputMode="decimal" value={draft.finalWeight?.amount ?? ''} onChange={e => change({ ...draft, finalWeight: e.target.value ? { amount: e.target.value.replace(',', '.'), unit: 'g', weightNature: 'edible' } : null })}/></label></div>
       <h3>Ingrédients</h3>{draft.ingredients.map(ingredient => <article className="recipe-ingredient" key={ingredient.id}>
         <b>{foods[ingredient.foodId]?.description ?? ingredient.foodId}</b><small>{foods[ingredient.foodId]?.sourceName}</small>
-        <div className="recipe-fields"><label>Quantité de {foods[ingredient.foodId]?.description ?? 'cet ingrédient'}<input inputMode="decimal" value={ingredient.quantity.amount} onChange={e => change(updateRecipeIngredientQuantity(draft, ingredient.id, { ...ingredient.quantity, amount: e.target.value.replace(',', '.') }))}/></label>
-        {ingredient.quantity.kind === 'physical' && <><label>Unité de {foods[ingredient.foodId]?.description ?? 'cet ingrédient'}<select value={ingredient.quantity.unit} onChange={e => {
-          const unit = e.target.value as 'g' | 'kg' | 'ml' | 'l'
-          change(updateRecipeIngredientQuantity(draft, ingredient.id, physicalQuantity(ingredient.quantity.amount, unit)))
-        }}><option>g</option><option>kg</option><option>ml</option><option>l</option></select></label>
-        {(ingredient.quantity.unit === 'g' || ingredient.quantity.unit === 'kg') && <label>Nature du poids<select value={ingredient.quantity.weightNature} onChange={e => change(updateRecipeIngredientQuantity(draft, ingredient.id, physicalQuantity(ingredient.quantity.amount, ingredient.quantity.kind === 'physical' ? ingredient.quantity.unit : 'g', e.target.value as 'edible' | 'gross' | 'unknown')))}><option value="edible">Comestible</option><option value="gross">Brut</option><option value="unknown">Inconnu</option></select></label>}</>}
+        <div className="recipe-fields"><FoodQuantityEditor raw food={foods[ingredient.foodId]} quantity={ingredient.quantity} amountLabel={'Quantité de '+(foods[ingredient.foodId]?.description??'cet ingrédient')} unitLabel={'Unité de '+(foods[ingredient.foodId]?.description??'cet ingrédient')} weightLabel="Nature du poids" onChange={q=>change(updateRecipeIngredientQuantity(draft,ingredient.id,q))}/>
         <button type="button" onClick={() => change(removeRecipeIngredient(draft, ingredient.id))}>Retirer cet ingrédient</button></div>
       </article>)}
       <button type="button" onClick={() => setPicker(true)}>Ajouter un ingrédient</button>

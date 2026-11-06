@@ -9,6 +9,10 @@ export type SupabaseCatalogEnv = {
 }
 
 export type CatalogFood = {
+  user_id?: string | null
+  revision?: number
+  archived?: boolean
+  personal_document?: import('../../src/personal-food.ts').PersonalFood | null
   id: string
   source_type: 'usda' | 'local' | 'custom'
   fdc_id: number | null
@@ -59,7 +63,7 @@ export class SupabaseCatalogError extends Error {
   }
 }
 
-const FOOD_SELECT = 'id,source_type,fdc_id,description,category,data_type,brand_owner,source_name,source_reference,source_notes,imported_at'
+const FOOD_SELECT = 'user_id,revision,archived,id,source_type,fdc_id,description,category,data_type,brand_owner,source_name,source_reference,source_notes,imported_at'
 const ALLOWED_BASIS_SOURCES = new Set(['fdc_data_type', 'fdc_branded_standardization', 'source_documentation', 'manual'])
 
 /** Searches the local catalogue by case-insensitive description substring. */
@@ -68,27 +72,36 @@ export async function searchCatalogFoods(
   query: string,
   limit = 25,
   fetcher: typeof fetch = fetch,
+  userId?: string,
 ): Promise<CatalogFood[]> {
   const term = query.trim()
   if (!term) throw new SupabaseCatalogError('Un terme de recherche est requis.')
   const boundedLimit = Math.min(Math.max(Math.trunc(limit), 1), 100)
   const url = restUrl(env, 'foods')
   url.searchParams.set('select', FOOD_SELECT)
+  url.searchParams.set('archived', 'eq.false')
+  if (userId) url.searchParams.set('or', `(user_id.is.null,user_id.eq.${userId})`)
+  else url.searchParams.set('user_id', 'is.null')
   url.searchParams.set('description', `ilike.*${escapeLike(term)}*`)
   url.searchParams.set('order', 'description.asc')
   url.searchParams.set('limit', String(boundedLimit))
   const rows = await requestJson<unknown[]>(url, env, fetcher)
-  return rows.map(catalogFoodFromWire)
+  return rows.map(catalogFoodFromWire).filter(food => !food.archived && (!food.user_id || food.user_id === userId))
 }
 
 /** Reads a local/personal entry without importing or replacing any source data. */
-export async function getCatalogNutrition(env: SupabaseCatalogEnv, id: string, fetcher: typeof fetch = fetch) {
+export async function getCatalogNutrition(env: SupabaseCatalogEnv, id: string, fetcher: typeof fetch = fetch, userId?: string, includeArchived = false) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new SupabaseCatalogError('Identifiant de catalogue invalide.')
-  const url = restUrl(env, 'foods'); url.searchParams.set('select', FOOD_SELECT); url.searchParams.set('id', `eq.${id}`)
+  const url = restUrl(env, 'foods'); url.searchParams.set('select', FOOD_SELECT + ',personal_document'); url.searchParams.set('id', `eq.${id}`)
+  if (userId) url.searchParams.set('or', `(user_id.is.null,user_id.eq.${userId})`)
+  else url.searchParams.set('user_id', 'is.null')
+  if (!includeArchived) url.searchParams.set('archived', 'eq.false')
   const foods = await requestJson<unknown[]>(url, env, fetcher)
   if (!foods.length) return null
   const food = catalogFoodFromWire(foods[0])
+  if (food.user_id && food.user_id !== userId || food.archived && !includeArchived) return null
   if (food.id !== id) throw new SupabaseCatalogError('La fiche reçue ne correspond pas à l’aliment demandé.')
+  if (food.personal_document) return catalogNutritionSnapshot(food, [])
   const nutrients = restUrl(env, 'food_nutrients'); nutrients.searchParams.set('select', '*'); nutrients.searchParams.set('food_id', `eq.${id}`)
   const rows = await requestJson<unknown[]>(nutrients, env, fetcher)
   return catalogNutritionSnapshot(food, rows.map(nutrientRowFromWire))
@@ -242,6 +255,7 @@ function catalogFoodFromWire(value: unknown): CatalogFood {
   if (!isRecord(value)) throw new SupabaseCatalogError('Supabase a retourné un aliment invalide.')
   const fdcId = optionalSafeInteger(value.fdc_id)
   return {
+    user_id: optionalString(value.user_id), revision: value.revision === undefined ? 1 : optionalSafeInteger(value.revision) ?? 1, archived: value.archived === true, personal_document: isRecord(value.personal_document) ? { ...value.personal_document, revision: optionalSafeInteger(value.personal_document.revision) } as CatalogFood['personal_document'] : null,
     id: requiredString(value.id),
     source_type: value.source_type as CatalogFood['source_type'],
     fdc_id: fdcId,

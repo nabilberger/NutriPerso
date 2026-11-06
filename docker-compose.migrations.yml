@@ -23,6 +23,8 @@ services:
       - ./supabase/migrations/20261104234000_user_profiles.sql:/docker-entrypoint-initdb.d/20261104234000_user_profiles.sql:ro
       - ./supabase/migrations/20261105183000_journal_delete_precedence.sql:/docker-entrypoint-initdb.d/20261105183000_journal_delete_precedence.sql:ro
       - ./supabase/migrations/20261106100000_meal_templates.sql:/docker-entrypoint-initdb.d/20261106100000_meal_templates.sql:ro
+      - ./supabase/migrations/20261106183939_personal_food_catalog.sql:/docker-entrypoint-initdb.d/20261106183939_personal_food_catalog.sql:ro
+
   test:
     image: postgres:17
     depends_on:
@@ -46,7 +48,13 @@ services:
       - /tests/meal-templates.integration.sql
       - -f
       - /tests/recipe-editor.integration.sql
+      - -f
+      - /tests/personal-foods.integration.sql
+      - -f
+      - /tests/personal-upgrade.integration.sql
     volumes:
       - ./supabase/tests/local/migrations.integration.sql:/tests/migrations.integration.sql:ro
       - ./supabase/tests/local/meal-templates.integration.sql:/tests/meal-templates.integration.sql:ro
       - ./supabase/tests/local/recipe-editor.integration.sql:/tests/recipe-editor.integration.sql:ro
+      - ./supabase/tests/local/personal-foods.integration.sql:/tests/personal-foods.integration.sql:ro
+      - ./supabase/tests/local/personal-upgrade.integration.sql:/tests/personal-upgrade.integration.sql:ro

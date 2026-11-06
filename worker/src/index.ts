@@ -1,3 +1,5 @@
+import { listPersonalFoods, getPersonalFood, savePersonalFood, archivePersonalFood, PersonalFoodError } from './personal-foods.ts'
+import { withFoodIdentity } from '../../src/personal-food.ts'
 import { NutritionError } from '../../src/domain/nutrition/types.ts'
 import { Hono } from 'hono'
 import type { Context } from 'hono'
@@ -125,14 +127,34 @@ app.get('/api/private/session', (c) => {
   return c.json({ user: { id: userId, email } })
 })
 
+app.get('/api/private/personal-foods', async (c) => {
+  try { return c.json({ foods: await listPersonalFoods(c.env,c.get('userScope').userId,fetcher) }) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+app.get('/api/private/personal-foods/:id', async (c) => {
+  try { const food=await getPersonalFood(c.env,c.get('userScope').userId,c.req.param('id'),fetcher); return food ? c.json({document:food}) : c.json({error:{code:'NOT_FOUND',message:'Fiche introuvable.'}},404) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+app.put('/api/private/personal-foods/:id', async (c) => {
+  const body=await readActionBody(c,['document','expectedRevision']); if(body instanceof Response)return body
+  if(!isRecord(body.document)||body.document.id!==c.req.param('id'))return c.json({error:{code:'INVALID_FOOD',message:'Identifiant de fiche invalide.'}},400)
+  try { return c.json({document:await savePersonalFood(c.env,c.get('userScope').userId,body.document,body.expectedRevision as number,fetcher)}) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+app.delete('/api/private/personal-foods/:id', async (c) => {
+  const body=await readActionBody(c,['expectedRevision']); if(body instanceof Response)return body
+  try { await archivePersonalFood(c.env,c.get('userScope').userId,c.req.param('id'),body.expectedRevision as number,fetcher);return c.body(null,204) }
+  catch(e) { return respondPersonalFoodError(c,e) }
+})
+
 app.get('/api/private/catalog', async (c) => {
   if ((c.req.query('q') ?? '').trim().length < 2) return c.json({ error: { code: 'INVALID_QUERY', message: 'Saisissez au moins deux caractères.' } }, 400)
-  try { return c.json({ foods: await searchCatalogFoods(c.env, c.req.query('q') ?? '', 50, fetcher) }) }
+  try { return c.json({ foods: await searchCatalogFoods(c.env, c.req.query('q') ?? '', 50, fetcher, c.get('userScope').userId) }) }
   catch (error) { return c.json({ error: { code: 'CATALOG_ERROR', message: error instanceof SupabaseCatalogError ? error.message : 'Catalogue indisponible.' } }, 502) }
 })
 app.get('/api/private/catalog/:foodId', async (c) => {
   try {
-    const food = await getCatalogNutrition(c.env, c.req.param('foodId'), fetcher)
+    const food = await getCatalogNutrition(c.env, c.req.param('foodId'), fetcher, c.get('userScope').userId)
     return food ? c.json({ food }) : c.json({ error: { code: 'NOT_FOUND', message: 'Aliment introuvable.' } }, 404)
   } catch (error) { return c.json({ error: { code: 'CATALOG_ERROR', message: error instanceof Error ? error.message : 'Catalogue indisponible.' } }, 502) }
 })
@@ -148,7 +170,7 @@ app.post('/api/private/recipes/:recipeId/confirm', async (c) => {
     if ((previous?.snapshotId ?? null) !== body.expectedPredecessorSnapshotId) throw new RecipePersistenceError('REVISION_CONFLICT', 'Le prédécesseur de cette recette a changé.')
     if (!persisted.draft.ingredients.length || !persisted.draft.servings) throw new RecipePersistenceError('INVALID_RECIPE', 'Ajoutez des ingrédients et un nombre de portions avant de confirmer.')
     const foods = new Map<string, import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot>()
-    for (const id of new Set(persisted.draft.ingredients.map(item => item.foodId))) foods.set(id, await resolveFoodSource(c.env, id, fetcher))
+    for (const id of new Set(persisted.draft.ingredients.map(item => item.foodId))) foods.set(id, await resolveFoodSource(c.env, id, fetcher, c.get('userScope').userId))
     const snapshot = await confirmRecipe(c.env, c.get('userScope'), persisted.draft, foods, { kind: 'total' },
       'nutrition-engine-v1', new Date().toISOString(), previous?.snapshotId ?? null, fetcher)
     return c.json({ snapshot })
@@ -311,11 +333,11 @@ app.onError((_error, c) => c.json({ error: { code: 'INTERNAL_ERROR', message: 'U
 return app
 }
 
-async function resolveFoodSource(env: Bindings, foodId: string, fetcher: typeof fetch): Promise<import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot> {
+async function resolveFoodSource(env: Bindings, foodId: string, fetcher: typeof fetch, userId: string): Promise<import('../../src/domain/nutrition/recipes.ts').FoodNutritionSnapshot> {
   if (foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(foodId)) {
-    const food = await getCatalogNutrition(env, foodId.startsWith('catalog:') ? foodId.slice(8) : foodId, fetcher)
+    const food = await getCatalogNutrition(env, foodId.startsWith('catalog:') ? foodId.slice(8) : foodId, fetcher, userId)
     if (!food) throw new RecipePersistenceError('INVALID_RECIPE', 'Un ingrédient du catalogue est introuvable.')
-    return { ...food, foodId }
+    return withFoodIdentity(food, foodId)
   }
   const match = /^usda:(\d+)$/.exec(foodId)
   if (!match) throw new RecipePersistenceError('INVALID_RECIPE', 'Source d’ingrédient non prise en charge.')
@@ -349,7 +371,7 @@ async function resolveJournalSources(
         foods.set(item.foodId, historicalItem.foodSnapshot)
         continue
       }
-      if (item.foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(item.foodId)) { foods.set(item.foodId, await resolveFoodSource(env, item.foodId, fetcher)); continue }
+      if (item.foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(item.foodId)) { foods.set(item.foodId, await resolveFoodSource(env, item.foodId, fetcher, scope.userId)); continue }
       const match = /^usda:(\d+)$/.exec(item.foodId)
       if (!match) throw new JournalPersistenceError('INVALID_JOURNAL', 'La source de cet aliment n’est pas prise en charge.')
       const fdcId = Number(match[1])
@@ -411,6 +433,9 @@ function containsUserId(value: unknown): boolean {
   return Object.entries(value).some(([key, nested]) => key.replace(/[_-]/g, '').toLowerCase() === 'userid' || containsUserId(nested))
 }
 
+function respondPersonalFoodError(c: Context<AppEnv>, e: unknown) {
+  return c.json({error:{code:e instanceof PersonalFoodError && e.status===409 ? 'REVISION_CONFLICT':'PERSONAL_FOOD_ERROR',message:e instanceof Error ? e.message:'Fiche invalide.'}},(e instanceof PersonalFoodError ? e.status:400) as ContentfulStatusCode)
+}
 function respondProfileError(c: Context<AppEnv>, error: unknown) {
   if (error instanceof ProfileError) return c.json({ error: { code: 'PROFILE_ERROR', message: error.message } }, error.status as ContentfulStatusCode)
   return c.json({ error: { code: 'PROFILE_ERROR', message: 'Le profil est momentanément indisponible.' } }, 502)

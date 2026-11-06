@@ -1,3 +1,4 @@
+import {emptyPersonalFood,personalFoodSnapshot,validatePersonalFood,type PersonalFood} from './personal-food.ts'
 import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot.ts'
 import {
   addFoodJournalItem, addRecipeJournalItem, cancelConfirmedMeal, confirmMeal, createJournalDay, createJournalState,
@@ -43,10 +44,9 @@ const chickpea = food(90001, 'Pois chiches (synthétique)', {
 const couscous = food(90002, 'Couscous (synthétique)', { protein: '3.8', carbohydrate: '8' })
 const personalId = '00000000-0000-4000-8000-000000090003'
 const personalBase = food(90003, 'Farine personnelle (synthétique)', { energyKcal: '165', protein: '10', carbohydrate: '20', fat: '5', fiber: '3' })
-const personalFood: FoodNutritionSnapshot = { ...personalBase, foodId: 'catalog:' + personalId, fdcId: null, sourceType: 'custom', sourceName: 'Catalogue personnel synthétique',
-  nutrients: personalBase.nutrients.map(n => ({ ...n, source: { ...n.source!, sourceType: 'custom', sourceName: 'Catalogue personnel synthétique' } })) }
 export function getFixtureFoodSource(foodId: string): FoodNutritionSnapshot | null {
-  return [chickpea, couscous, personalFood].find((item) => item.foodId === foodId) ?? null
+  if(foodId.startsWith('catalog:')){const doc=fixturePersonalFoods.get(foodId.slice(8));return doc&&!doc.archived?personalFoodSnapshot(doc):null}
+  return [chickpea, couscous].find((item) => item.foodId === foodId) ?? null
 }
 const recipeDraft = setRecipeServings(addRecipeIngredient(createRecipe({ id: recipeId, name: 'Bol céréales & pois chiches (synthétique)' }), {
   id: 'fixture-recipe-ingredient', foodId: chickpea.foodId,
@@ -59,6 +59,11 @@ const fixtureRecipes = new Map<string, { draft: RecipeDraft; snapshots: Confirme
 const fixtureStorage = typeof sessionStorage !== 'undefined' && import.meta.env?.VITE_NUTRIPERSO_UI_FIXTURES === '1' ? sessionStorage : null
 try { const stored = fixtureStorage?.getItem('nutrip-fixture-recipes-v1'); if (stored) for (const [id, record] of JSON.parse(stored)) fixtureRecipes.set(id, record) } catch { /* Seed remains available. */ }
 function saveFixtureRecipes() { fixtureStorage?.setItem('nutrip-fixture-recipes-v1', JSON.stringify([...fixtureRecipes])) }
+const seedPersonal:PersonalFood={...emptyPersonalFood(personalId),name:personalBase.description,reference:'Catalogue personnel synthétique',nutrients:{energy:{value:'165',unit:'kcal'},protein:{value:'10',unit:'g'},carbohydrate:{value:'20',unit:'g'},fat:{value:'5',unit:'g'},fiber:{value:'3',unit:'g'}}}
+const fixturePersonalFoods=new Map<string,PersonalFood>([[personalId,seedPersonal]])
+try{const data=fixtureStorage?.getItem('nutrip-fixture-personal-v1');if(data)for(const [id,food] of JSON.parse(data))fixturePersonalFoods.set(id,food)}catch{/* Seed remains available. */}
+function saveFixturePersonal(){fixtureStorage?.setItem('nutrip-fixture-personal-v1',JSON.stringify([...fixturePersonalFoods]))}
+function fixtureFoodMap(){return new Map([chickpea,couscous,...[...fixturePersonalFoods.values()].filter(f=>!f.archived).map(personalFoodSnapshot)].map(f=>[f.foodId,f]))}
 function dateDaysAgo(days: number): string {
   const d = new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()-days)
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
@@ -71,7 +76,7 @@ function makeSnapshot(daysAgo: number): ConfirmedMealSnapshot {
     quantity:{kind:'physical',amount:String(100+daysAgo),unit:'g',weightNature:'edible'},sortOrder:0})
   if(daysAgo===0) state=addRecipeJournalItem(state,dayId,mealId,{id:'fixture-recipe-item',recipeSnapshot,
     quantity:{kind:'servings',amount:'1'},sortOrder:1})
-  return confirmMeal(state,dayId,mealId,{foods:new Map([[chickpea.foodId,chickpea],[couscous.foodId,couscous]])},
+  return confirmMeal(state,dayId,mealId,{foods:fixtureFoodMap()},
     {snapshotId:`fixture-confirmed-${daysAgo}`,confirmedAt:`${date}T12:30:00.000Z`,engineVersion:'nutrition-engine-v1-fixture'}).snapshot
 }
 const history: ConfirmedMealSnapshot[]=Array.from({length:24},(_,i)=>makeSnapshot(i))
@@ -110,8 +115,27 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
     } as T
   }
   if(url.pathname==='/api/private/recipes'&&method==='GET')return {recipes:[...fixtureRecipes.values()].map(r=>r.draft).filter(r=>!r.archived)} as T
-  if(url.pathname==='/api/private/catalog'&&method==='GET')return {foods:normalize(personalFood.description).includes(normalize(url.searchParams.get('q')??''))?[{id:personalId,description:personalFood.description,source_type:'custom',source_name:personalFood.sourceName}]:[]} as T
-  if(url.pathname==='/api/private/catalog/'+personalId&&method==='GET')return {food:personalFood} as T
+  if(url.pathname==='/api/private/personal-foods'&&method==='GET')return {foods:[...fixturePersonalFoods.values()].map(f=>({id:f.id,name:f.name,revision:f.revision,archived:f.archived}))} as T
+  const personalPath=/^\/api\/private\/personal-foods\/([^/]+)$/.exec(url.pathname)
+  if(personalPath){
+    const id=decodeURIComponent(personalPath[1]!),current=fixturePersonalFoods.get(id)
+    if(method==='GET'){if(!current)throw new Error('404 Fiche introuvable.');return {document:current} as T}
+    if(method==='PUT'){
+      const data=body(init),document=data.document as PersonalFood;validatePersonalFood(document)
+      if(document.id!==id||document.archived)throw new Error('400 Fiche invalide.')
+      if(current&&current.revision===Number(data.expectedRevision)+1&&JSON.stringify(current)===JSON.stringify(document))return {document:current} as T
+      if(current?.archived||data.expectedRevision!==(current?.revision??0)||document.revision!==Number(data.expectedRevision)+1)throw new Error('409 Cette fiche a changé. Rechargez la version actuelle avant de réessayer.')
+      fixturePersonalFoods.set(id,document);saveFixturePersonal();return {document} as T
+    }
+    if(method==='DELETE'){
+      if(!current)throw new Error('404 Fiche introuvable.')
+      if(!current.archived){if(body(init).expectedRevision!==current.revision)throw new Error('409 Cette fiche a changé.');fixturePersonalFoods.set(id,{...current,archived:true,revision:current.revision+1});saveFixturePersonal()}
+      return undefined as T
+    }
+  }
+  if(url.pathname==='/api/private/catalog'&&method==='GET')return {foods:[...fixturePersonalFoods.values()].filter(f=>!f.archived&&normalize(f.name).includes(normalize(url.searchParams.get('q')??''))).map(f=>({id:f.id,description:f.name,source_type:'custom',source_name:'Saisie personnelle',revision:f.revision}))} as T
+  const catalogPath=/^\/api\/private\/catalog\/([^/]+)$/.exec(url.pathname)
+  if(catalogPath&&method==='GET'){const food=getFixtureFoodSource('catalog:'+decodeURIComponent(catalogPath[1]!));if(!food)throw new Error('404 Aliment indisponible ou archivé.');return {food} as T}
   if(url.pathname==='/api/private/profile'&&method==='GET')return {profile:null} as T
   if(url.pathname==='/api/private/journal/history'&&method==='GET'){
     const q=url.searchParams.get('q')??'',from=url.searchParams.get('from')??'',to=url.searchParams.get('to')??''
@@ -152,7 +176,7 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
     if(last?.recipe.revision===record.draft.revision)return {snapshot:last} as T
     if((last?.snapshotId??null)!==data.expectedPredecessorSnapshotId)throw new Error('409 Le prédécesseur a changé.')
     if(!record.draft.ingredients.length||!record.draft.servings)throw new Error('Ajoutez des ingrédients et des portions.')
-    const calculation=calculateRecipe(record.draft,new Map([chickpea,couscous,personalFood].map(f=>[f.foodId,f])))
+    const calculation=calculateRecipe(record.draft,fixtureFoodMap())
     const snapshot=createConfirmedRecipeSnapshot(record.draft,calculation,'nutrition-engine-v1-fixture',new Date().toISOString())
     record.snapshots.push(snapshot);saveFixtureRecipes();return {snapshot} as T
   }
@@ -193,7 +217,7 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
       if(retry.logicalMealId!==mealId||retry.dayId!==dayId||retry.status!=='confirmed')throw new Error('409 Identifiant de confirmation déjà utilisé.')
       return {day,snapshot:retry} as T
     }
-    const result=confirmMeal({days:[day],snapshots:history},day.id,meal.id,{foods:new Map([[chickpea.foodId,chickpea],[couscous.foodId,couscous]])},
+    const result=confirmMeal({days:[day],snapshots:history},day.id,meal.id,{foods:fixtureFoodMap()},
       {snapshotId:String(data.snapshotId),confirmedAt:String(data.confirmedAt),engineVersion:String(data.engineVersion)})
     const updated=result.state.days.find(candidate=>candidate.id===day.id)!
     drafts.set(day.localDate,updated)
