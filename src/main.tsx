@@ -5,6 +5,7 @@ import App from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import './styles.css'
 import './account-menu.css'
+import './visual-identity.css'
 
 registerSW({ immediate: true })
 
