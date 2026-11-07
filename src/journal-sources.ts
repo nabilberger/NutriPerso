@@ -3,7 +3,6 @@ import type { JournalDayDraft } from './domain/nutrition/journal.ts'
 import type { FoodNutritionSnapshot } from './domain/nutrition/recipes.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
 import { uiFixtureMode } from './ui-fixture-mode'
-import { getFixtureFoodSource } from './dev-ui-fixtures'
 
 export async function loadFoodSources(
   day: JournalDayDraft,
@@ -12,7 +11,10 @@ export async function loadFoodSources(
   fetcher: typeof fetch = fetch,
   personalLoader?: (id:string)=>Promise<FoodNutritionSnapshot>,
 ): Promise<Readonly<Record<string, FoodNutritionSnapshot>>> {
-  if (uiFixtureMode) return resolveFixtureFoodSources(day, cached, isActive)
+  if (uiFixtureMode && import.meta.env.DEV) {
+    const { getFixtureFoodSource } = await import('./dev-ui-fixtures')
+    return resolveFixtureFoodSources(day, cached, isActive, getFixtureFoodSource)
+  }
   const ids = unresolvedFoodIds(day, cached)
   const entries = await Promise.all(ids.map(async (foodId) => {
     if (foodId.startsWith('catalog:') || /^[0-9a-f-]{36}$/i.test(foodId)) {
@@ -37,6 +39,7 @@ export function resolveFixtureFoodSources(
   day: JournalDayDraft,
   cached: Readonly<Record<string, FoodNutritionSnapshot>>,
   isActive: () => boolean,
+  getFixtureFoodSource: (id: string) => FoodNutritionSnapshot | null,
 ): Readonly<Record<string, FoodNutritionSnapshot>> {
   const next: Record<string, FoodNutritionSnapshot> = { ...cached }
   for(const id of unresolvedFoodIds(day,cached)){const food=getFixtureFoodSource(id);if(food)next[id]=food;else if(id.startsWith('catalog:')&&cached[id])next[id]={...cached[id]!,nutrients:[],portionEquivalences:[],dataType:'Indisponible'}}

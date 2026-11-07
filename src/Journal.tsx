@@ -19,7 +19,6 @@ import type { ConfirmedRecipeSnapshot } from './domain/nutrition/recipe-snapshot
 import { buildMealReuseDraft, selectCurrentRecipeSnapshot, type MealReuseDTO } from './meal-reuse'
 import { createUuidV4 } from './secure-uuid.ts'
 import { uiFixtureMode } from './ui-fixture-mode'
-import { getFixtureFoodSource } from './dev-ui-fixtures'
 import { requestFoodCatalog } from './catalog-client'
 import { decimalToFraction, parseDecimal } from './domain/nutrition/decimal.ts'
 import { usdaDetailToFoodSnapshot, type UsdaFoodDetailForNutrition } from './domain/nutrition/usda-food-snapshot.ts'
@@ -157,7 +156,7 @@ export default function Journal({ userId, reuseRequest, onReuseConsumed }: { rea
         } catch {
           setMessageForKey(requestKey, 'Synchronisation en attente : la dernière version serveur n’a pas pu être relue.')
         }
-      } else if (uiFixtureMode) {
+      } else if (import.meta.env.DEV && uiFixtureMode) {
         setMessageForKey(requestKey, `Erreur de simulation locale : ${message || 'la transition fictive n’a pas abouti.'}`)
       } else setMessageForKey(requestKey, navigator.onLine
         ? 'Serveur inaccessible : les changements restent en attente sur cet appareil.'
@@ -477,7 +476,9 @@ export function FoodPicker({ onCancel, onSelect, addLabel = 'Ajouter au repas', 
     try {
       const response = await requestFoodCatalog(`/api/foods/${food.fdcId}`)
       if (!response.ok) throw new Error('La fiche USDA est indisponible.')
-      const snapshot = uiFixtureMode ? getFixtureFoodSource(`usda:${food.fdcId}`) : usdaDetailToFoodSnapshot(await response.json() as FoodDetail)
+      const snapshot = import.meta.env.DEV && uiFixtureMode
+        ? (await import('./dev-ui-fixtures')).getFixtureFoodSource(`usda:${food.fdcId}`)
+        : usdaDetailToFoodSnapshot(await response.json() as FoodDetail)
       if (!snapshot) throw new Error('La fiche synthétique est introuvable.')
       setDetail(snapshot)
       const basis = snapshot.nutrients.find((datum) => datum.status === 'reported')?.basis

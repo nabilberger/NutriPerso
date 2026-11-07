@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useMemo, useState, type FormEvent
 import { authClient } from './client'
 import type { AuthSession, AuthState, PasswordSetupFlow } from './supabase-auth'
 import { uiFixtureMode } from '../ui-fixture-mode'
-import { fixtureUserId } from '../dev-ui-fixtures'
 
 type AuthContextValue = AuthState & {
   readonly loading: boolean
@@ -20,11 +19,18 @@ export function AuthProvider({ children }: { readonly children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (uiFixtureMode) {
-      setAuth({ session: { access_token: 'ui-fixture-only', refresh_token: 'ui-fixture-only', expires_at: 4102444800,
-        user: { id: fixtureUserId, email: 'recette@nutrip.local' } }, passwordSetupFlow: null })
-      setLoading(false)
-      return
+    if (import.meta.env.DEV && uiFixtureMode) {
+      let active = true
+      void import('../dev-ui-fixtures').then(({ fixtureUserId }) => {
+        if (!active) return
+        setAuth({ session: { access_token: 'ui-fixture-only', refresh_token: 'ui-fixture-only', expires_at: 4102444800,
+          user: { id: fixtureUserId, email: 'recette@nutrip.local' } }, passwordSetupFlow: null })
+      }).catch((reason: unknown) => {
+        if (active) setError(errorMessage(reason))
+      }).finally(() => {
+        if (active) setLoading(false)
+      })
+      return () => { active = false }
     }
     const unsubscribe = authClient.subscribe(setAuth)
     void authClient.initialize().catch((reason: unknown) => setError(errorMessage(reason))).finally(() => setLoading(false))
@@ -41,18 +47,18 @@ export function AuthProvider({ children }: { readonly children: ReactNode }) {
     ...auth, loading, error,
     async signIn(email, password) {
       setError(null)
-      try { if (!uiFixtureMode) await authClient.signInWithPassword(email, password) }
+      try { if (!(import.meta.env.DEV && uiFixtureMode)) await authClient.signInWithPassword(email, password) }
       catch (reason) { setError(errorMessage(reason)); throw reason }
     },
-    async signOut() { setError(null); if (!uiFixtureMode) await authClient.signOut() },
+    async signOut() { setError(null); if (!(import.meta.env.DEV && uiFixtureMode)) await authClient.signOut() },
     async setPassword(password) {
       setError(null)
-      try { if (!uiFixtureMode) await authClient.setPassword(password) }
+      try { if (!(import.meta.env.DEV && uiFixtureMode)) await authClient.setPassword(password) }
       catch (reason) { setError(errorMessage(reason)); throw reason }
     },
   }), [auth, loading, error])
 
-  return <AuthContext.Provider value={value}>{uiFixtureMode && <div role="status" aria-label="Mode recette UI" style={{ position: 'fixed', inset: '0 0 auto', zIndex: 1000, padding: '8px 14px', textAlign: 'center', background: '#6d4c91', color: 'white', fontSize: 12, fontWeight: 700 }}>MODE RECETTE UI · DONNÉES SYNTHÉTIQUES · AUCUNE CONNEXION SUPABASE</div>}{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={value}>{import.meta.env.DEV && uiFixtureMode && <div role="status" aria-label="Mode recette UI" style={{ position: 'fixed', inset: '0 0 auto', zIndex: 1000, padding: '8px 14px', textAlign: 'center', background: '#6d4c91', color: 'white', fontSize: 12, fontWeight: 700 }}>MODE RECETTE UI · DONNÉES SYNTHÉTIQUES · AUCUNE CONNEXION SUPABASE</div>}{children}</AuthContext.Provider>
 }
 
 export function useAuth(): AuthContextValue {
