@@ -93,6 +93,7 @@ const body=(init:RequestInit)=>JSON.parse(String(init.body??'{}')) as Record<str
 export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise<T>{
   const url=new URL(path,'http://nutrip.local'),method=(init.method??'GET').toUpperCase()
   if(url.pathname==='/api/private/photos'&&method==='GET')return {photos:[]} as T
+  if(url.pathname==='/api/private/coach'&&method==='POST')return {answer:{recorded:'Journal de démonstration',suggestions:'Préparez un plat de pois chiches et de légumes.',uncertainty:'Suggestion simulée'}} as T
   if(url.pathname==='/api/private/photo-analysis'&&method==='POST')return {proposal:{version:1,warning:'Simulation uniquement : photo ambiguë, ingrédients cachés possibles.',items:[{name:'Pois chiches',amount:'120',unit:'g',source:'USDA',uncertainty:'Estimation visuelle'},{name:'Sauce',amount:null,unit:'g',source:'Catalogue personnel',uncertainty:'Quantité inconnue'}]}} as T
   if(url.pathname==='/api/private/photo-analysis/usage')return {reservedDh:1,requests:1} as T
   if(url.pathname.startsWith('/api/private/photos/')&&method==='DELETE')return undefined as T

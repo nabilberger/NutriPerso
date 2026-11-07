@@ -1,4 +1,5 @@
-import { analyzePhoto, expirePhotos, photoRpc, type PhotoEnv } from './photo-service.ts'
+import { askCoach, CoachInputError, readCoachJson, type CoachEnv } from './coach.ts'
+import { analyzePhoto, expirePhotos, photoRpc } from './photo-service.ts'
 import { listPersonalFoods, getPersonalFood, savePersonalFood, archivePersonalFood, PersonalFoodError } from './personal-foods.ts'
 import { withFoodIdentity } from '../../src/personal-food.ts'
 import { NutritionError } from '../../src/domain/nutrition/types.ts'
@@ -20,7 +21,7 @@ import { getActiveJournalSnapshots } from './supabase-journal.ts'
 import { deleteMealTemplate, listMealTemplates, MealTemplateError, saveMealTemplate } from './supabase-meal-templates.ts'
 import { filterMealHistory, paginateMealHistory } from './meal-history.ts'
 
-type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv & PhotoEnv
+type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv & CoachEnv
 type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
 type JsonRecord = Record<string, unknown>
 type NutrientValue = string
@@ -63,6 +64,17 @@ app.use('/api/private/*', async (c, next) => {
   }
   c.set('userScope', result.scope)
   await next()
+})
+
+app.post('/api/private/coach', async c => {
+  if (c.env.COACH_ENABLED !== '1') return c.json({ error: { message: 'Le Coach IA n’est pas encore activé.' } }, 503)
+  try {
+    const input = await readCoachJson(c.req.raw.body, 24_000)
+    return c.json({ answer: await askCoach(c.env, c.get('userScope').userId, input, fetcher) })
+  } catch (error) {
+    if (error instanceof CoachInputError) return c.json({ error: { message: 'Question ou historique invalide.' } }, 400)
+    return c.json({ error: { message: 'Le Coach IA est temporairement indisponible. Vérifiez le budget avant de réessayer.' } }, 503)
+  }
 })
 
 app.post('/api/private/photo-analysis', async c => {
