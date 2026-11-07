@@ -23,7 +23,7 @@ export default function PhotoAnalysis({ photo, storageKey, onDraft }: { photo: s
       const p=parsePhotoProposal(r.proposal)
       if(alive.current){const expires=r.expiresAt?Date.parse(r.expiresAt):Date.now()+30*86400000;localStorage.setItem('nutrip-photo-expiry:'+storageKey.replace('nutrip-photo-v1:',''),String(expires));setSaved(s=>({...s,rows:p.items,warning:p.warning,pending:false,expires}))}
     }catch(e){if(alive.current)setError(e instanceof Error?e.message:'Analyse indisponible.')}
-    finally{if(alive.current){setBusy(false);void requestPrivateJson<{reservedDh:number;requests:number}>('/api/private/photo-analysis/usage').then(u=>setUsage(`${u.requests} tentative(s), ${u.reservedDh} DH réservés ce mois sur 50 DH.`)).catch(()=>{})}}
+    finally{if(alive.current){setBusy(false);void requestPrivateJson<{reservedDh:number;requests:number}>('/api/private/photo-analysis/usage').then(u=>setUsage(`${u.requests} tentative(s) IA partagée(s), ${u.reservedDh} DH réservés ce mois sur 50 DH.`)).catch(()=>{})}}
   }
   async function remove(){if(!saved.id)return;setBusy(true);try{await requestPrivateJson('/api/private/photos/'+saved.id,{method:'DELETE'});setSaved(s=>({...s,id:null}));setError('Photo distante supprimée. Les repas restent inchangés.')}catch{setError('Suppression impossible, réessayez.')}finally{setBusy(false)}}
   function update(index:number,patch:Partial<Row>){setSaved(s=>({...s,rows:s.rows.map((r,i)=>i===index?{...r,...patch}:r)}))}

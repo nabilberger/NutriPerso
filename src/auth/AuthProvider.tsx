@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { readonly children: ReactNode }) {
     },
   }), [auth, loading, error])
 
-  return <AuthContext.Provider value={value}>{import.meta.env.DEV && uiFixtureMode && <div role="status" aria-label="Mode recette UI" style={{ position: 'fixed', inset: '0 0 auto', zIndex: 1000, padding: '8px 14px', textAlign: 'center', background: '#6d4c91', color: 'white', fontSize: 12, fontWeight: 700 }}>MODE RECETTE UI · DONNÉES SYNTHÉTIQUES · AUCUNE CONNEXION SUPABASE</div>}{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={value}>{import.meta.env.DEV && uiFixtureMode && <div role="status" aria-label="Mode recette UI" style={{ position: 'fixed', pointerEvents: 'none', inset: '0 0 auto', zIndex: 1000, padding: '8px 14px', textAlign: 'center', background: '#6d4c91', color: 'white', fontSize: 12, fontWeight: 700 }}>MODE RECETTE UI · DONNÉES SYNTHÉTIQUES · AUCUNE CONNEXION SUPABASE</div>}{children}</AuthContext.Provider>
 }
 
 export function useAuth(): AuthContextValue {
