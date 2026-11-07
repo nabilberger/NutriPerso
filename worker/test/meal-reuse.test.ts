@@ -6,7 +6,7 @@ import type { ConfirmedRecipeSnapshot } from '../../src/domain/nutrition/recipe-
 import { createUuidV4 } from '../../src/secure-uuid.ts'
 import { calculateJournalDayPreview } from '../../src/domain/nutrition/journal.ts'
 import { resolveFixtureFoodSources } from '../../src/journal-sources.ts'
-import { fixtureRequest } from '../../src/dev-ui-fixtures.ts'
+import { fixtureRequest, getFixtureFoodSource } from '../../src/dev-ui-fixtures.ts'
 
 test('reuse creates fresh editable draft identifiers without linking or changing its source snapshot', () => {
   const created = createJournalDay({ days: [], snapshots: [] }, {
@@ -133,7 +133,7 @@ test('fixture history can be reused into an independent food-and-recipe draft wi
   assert.ok(draft.items.some((item) => item.kind === 'recipe'))
   assert.deepEqual(reused.snapshots, beforeSnapshots)
 
-  const currentSources = resolveFixtureFoodSources(reused.days[0]!, {}, () => true)
+  const currentSources = resolveFixtureFoodSources(reused.days[0]!, {}, () => true, getFixtureFoodSource)
   assert.equal(currentSources['usda:90001']?.description, 'Pois chiches (synthétique)')
   const preview = calculateJournalDayPreview(reused, dayId, { foods: new Map(Object.entries(currentSources)) })
   assert.equal(preview.energy?.status, 'complete')

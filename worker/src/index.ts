@@ -1,3 +1,4 @@
+import { analyzePhoto, expirePhotos, photoRpc, type PhotoEnv } from './photo-service.ts'
 import { listPersonalFoods, getPersonalFood, savePersonalFood, archivePersonalFood, PersonalFoodError } from './personal-foods.ts'
 import { withFoodIdentity } from '../../src/personal-food.ts'
 import { NutritionError } from '../../src/domain/nutrition/types.ts'
@@ -19,7 +20,7 @@ import { getActiveJournalSnapshots } from './supabase-journal.ts'
 import { deleteMealTemplate, listMealTemplates, MealTemplateError, saveMealTemplate } from './supabase-meal-templates.ts'
 import { filterMealHistory, paginateMealHistory } from './meal-history.ts'
 
-type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv
+type Bindings = { FDC_API_KEY?: string; SUPABASE_PUBLISHABLE_KEY?: string } & SupabaseCatalogEnv & PhotoEnv
 type AppEnv = { Bindings: Bindings; Variables: { userScope: AuthenticatedUserScope } }
 type JsonRecord = Record<string, unknown>
 type NutrientValue = string
@@ -62,6 +63,33 @@ app.use('/api/private/*', async (c, next) => {
   }
   c.set('userScope', result.scope)
   await next()
+})
+
+app.post('/api/private/photo-analysis', async c => {
+  try {
+    const reader = c.req.raw.body?.getReader()
+    if (!reader) return c.json({error:{message:'Photo requise.'}},400)
+    let size = 0; const chunks: Uint8Array[] = []
+    while (true) { const {done,value} = await reader.read(); if(done) break; size += value.length; if(size > 1_500_000) { await reader.cancel(); return c.json({error:{message:'Photo trop volumineuse.'}},413) }; chunks.push(value) }
+    const bytes = new Uint8Array(size); let offset=0; for(const part of chunks){bytes.set(part,offset);offset+=part.length}
+    return c.json(await analyzePhoto(c.env,c.get('userScope').userId,JSON.parse(new TextDecoder().decode(bytes)),fetcher))
+  } catch(e) { return c.json({error:{code:'PHOTO_UNAVAILABLE',message:e instanceof Error ? e.message : 'Analyse indisponible.'}},503) }
+})
+app.get('/api/private/photo-analysis/usage', async c => {
+  try { return c.json(await photoRpc(c.env,'photo_analysis_usage',{},fetcher)) }
+  catch { return c.json({error:{message:'Suivi de consommation indisponible.'}},503) }
+})
+app.get('/api/private/photos', async c => {
+  if(!c.env.MEAL_PHOTOS) return c.json({photos:[]})
+  const page=await c.env.MEAL_PHOTOS.list({prefix:c.get('userScope').userId+'/',include:['customMetadata'],limit:1000})
+  return c.json({photos:page.objects.filter(o=>Number(o.customMetadata?.expires)>Date.now()).map(o=>({id:o.key.split('/')[1]!.replace('.jpg',''),expiresAt:new Date(Number(o.customMetadata!.expires)).toISOString()}))})
+})
+app.delete('/api/private/photos/:id', async c => {
+  const id=c.req.param('id')
+  if (!/^[0-9a-f-]{36}$/.test(id)) return c.json({error:{message:'Identifiant invalide.'}},400)
+  if (!c.env.MEAL_PHOTOS) return c.json({error:{message:'Stockage indisponible.'}},503)
+  try { await c.env.MEAL_PHOTOS.delete(`${c.get('userScope').userId}/${id}.jpg`);return c.body(null,204) }
+  catch {return c.json({error:{message:'Suppression impossible. Réessayez.'}},503)}
 })
 
 app.get('/api/foods/search', async (c) => {
@@ -671,4 +699,4 @@ function respondWithError(c: Context<AppEnv>, error: unknown) {
 }
 
 const app = createWorkerApp()
-export default app
+export default Object.assign(app, { scheduled: async (_event: ScheduledEvent, env: Bindings) => { await expirePhotos(env) } })

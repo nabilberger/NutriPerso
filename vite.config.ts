@@ -25,7 +25,6 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
       manifest: {
         name: 'NutriPerso',
         short_name: 'NutriPerso',
@@ -36,7 +35,8 @@ export default defineConfig({
         background_color: '#f7f8f4',
         theme_color: '#f7f8f4',
         icons: [
-          { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: '/nutriperso-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/nutriperso-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
         ],
       },
     }),
