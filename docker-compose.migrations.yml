@@ -26,6 +26,7 @@ services:
       - ./supabase/migrations/20261106183939_personal_food_catalog.sql:/docker-entrypoint-initdb.d/20261106183939_personal_food_catalog.sql:ro
 
       - ./supabase/migrations/20261106223233_photo_analysis_budget.sql:/docker-entrypoint-initdb.d/20261106223233_photo_analysis_budget.sql:ro
+      - ./supabase/migrations/20261107174750_waist_measurements.sql:/docker-entrypoint-initdb.d/20261107174750_waist_measurements.sql:ro
 
   test:
     image: postgres:17
@@ -56,8 +57,11 @@ services:
       - /tests/personal-upgrade.integration.sql
       - -f
       - /tests/photo-analysis.integration.sql
+      - -f
+      - /tests/waist.integration.sql
     volumes:
       - ./supabase/tests/local/photo-analysis.integration.sql:/tests/photo-analysis.integration.sql:ro
+      - ./supabase/tests/local/waist.integration.sql:/tests/waist.integration.sql:ro
       - ./supabase/tests/local/migrations.integration.sql:/tests/migrations.integration.sql:ro
       - ./supabase/tests/local/meal-templates.integration.sql:/tests/meal-templates.integration.sql:ro
       - ./supabase/tests/local/recipe-editor.integration.sql:/tests/recipe-editor.integration.sql:ro

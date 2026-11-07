@@ -90,6 +90,18 @@ function saveFixtureJournal() { fixtureStorage?.setItem('nutrip-fixture-journal-
 
 const normalize=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('fr')
 const body=(init:RequestInit)=>JSON.parse(String(init.body??'{}')) as Record<string, any>
+const defaultFixtureProfile = {
+  displayName:'',avatarDataUrl:null,heightCm:null,targetWeightKg:70,goal:'lose',dietaryPattern:'mediterranean',
+  mealsPerDay:3,fastingEnabled:false,fastingStart:null,fastingEnd:null,avoidAddedSalt:false,avoidAddedSugar:false,
+  notes:'',timeZone:'UTC',
+}
+type FixtureWaist = { id: string; measuredOn: string; waistCm: number }
+let fixtureProfile = defaultFixtureProfile
+let fixtureWaist: FixtureWaist[] = []
+try {
+  fixtureProfile = JSON.parse(fixtureStorage?.getItem('nutrip-fixture-profile') ?? 'null') ?? defaultFixtureProfile
+  fixtureWaist = JSON.parse(fixtureStorage?.getItem('nutrip-fixture-waist') ?? '[]')
+} catch { /* Defaults stay available. */ }
 export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise<T>{
   const url=new URL(path,'http://nutrip.local'),method=(init.method??'GET').toUpperCase()
   if(url.pathname==='/api/private/photos'&&method==='GET')return {photos:[]} as T
@@ -98,11 +110,26 @@ export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise
     {id:'fixture-weight-2',measuredOn:'2026-11-04',weightKg:72.3,note:''},
     {id:'fixture-weight-1',measuredOn:'2026-10-20',weightKg:73.8,note:''},
   ]} as T
-  if(url.pathname==='/api/private/profile'&&method==='GET')return {profile:{
-    displayName:'',avatarDataUrl:null,heightCm:null,targetWeightKg:70,goal:'lose',dietaryPattern:'mediterranean',
-    mealsPerDay:3,fastingEnabled:false,fastingStart:null,fastingEnd:null,avoidAddedSalt:false,avoidAddedSugar:false,
-    notes:'',timeZone:'UTC',
-  }} as T
+  if(url.pathname==='/api/private/profile'){
+    if(method==='PUT'){
+      fixtureProfile = JSON.parse(String(init.body))
+      fixtureStorage?.setItem('nutrip-fixture-profile', JSON.stringify(fixtureProfile))
+    }
+    return {profile:fixtureProfile} as T
+  }
+  if(url.pathname==='/api/private/waist-measurements'){
+    if(method==='GET')return {measurements:fixtureWaist} as T
+    const { measuredOn, waistCm } = body(init)
+    const measurement = { id: crypto.randomUUID(), measuredOn, waistCm }
+    fixtureWaist = [measurement, ...fixtureWaist]
+    fixtureStorage?.setItem('nutrip-fixture-waist', JSON.stringify(fixtureWaist))
+    return {measurement} as T
+  }
+  if(url.pathname.startsWith('/api/private/waist-measurements/')&&method==='DELETE'){
+    fixtureWaist = fixtureWaist.filter(row=>!url.pathname.endsWith('/'+row.id))
+    fixtureStorage?.setItem('nutrip-fixture-waist', JSON.stringify(fixtureWaist))
+    return undefined as T
+  }
   if(url.pathname==='/api/private/coach'&&method==='POST')return {answer:{recorded:'Journal de démonstration',suggestions:'Préparez un plat de pois chiches et de légumes.',uncertainty:'Suggestion simulée'}} as T
   if(url.pathname==='/api/private/photo-analysis'&&method==='POST')return {proposal:{version:1,warning:'Simulation uniquement : photo ambiguë, ingrédients cachés possibles.',items:[{name:'Pois chiches',amount:'120',unit:'g',source:'USDA',uncertainty:'Estimation visuelle'},{name:'Sauce',amount:null,unit:'g',source:'Catalogue personnel',uncertainty:'Quantité inconnue'}]}} as T
   if(url.pathname==='/api/private/photo-analysis/usage')return {reservedDh:1,requests:1} as T

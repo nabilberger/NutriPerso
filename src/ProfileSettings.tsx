@@ -44,7 +44,8 @@ async function compressPhoto(file: File): Promise<string> {
     return result
   } finally { URL.revokeObjectURL(url) }
 }
-export default function ProfileSettings({email,onSaved}: Props) {
+export default function ProfileSettings({email,onSaved,guided = false,onGuideDone}: Props & { guided?: boolean; onGuideDone?: () => void }) {
+  const [step,setStep]=useState(0)
   const [profile,setProfile]=useState<Profile|null>(null)
   const [loading,setLoading]=useState(true)
   const [saving,setSaving]=useState(false)
@@ -71,23 +72,24 @@ export default function ProfileSettings({email,onSaved}: Props) {
   async function submit(e:FormEvent<HTMLFormElement>){
     e.preventDefault()
     if(!profile)return
+    if(guided && step < 2){setStep(step + 1);return}
     setSaving(true);setError('');setMessage('')
     try {
       const saved=await requestPrivateJson<ProfileResponse>('/api/private/profile',{
         method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(profile)
       })
-      setProfile(saved.profile);onSaved(saved.profile);setMessage('Votre profil a été enregistré.')
+      setProfile(saved.profile);onSaved(saved.profile);setMessage('Votre profil a été enregistré.');if(guided)onGuideDone?.()
     }catch(err){setError(err instanceof Error?err.message:'Enregistrement impossible.')}
     finally {setSaving(false)}
   }
   return <div className="profile-page">
-    <div className="profile-heading"><small>VOTRE ESPACE PERSONNEL</small><h1 tabIndex={-1}>Un espace <em>à votre image.</em></h1>
+    <div className="profile-heading"><small>VOTRE ESPACE PERSONNEL</small><h1 tabIndex={-1}>{guided ? 'Configuration du profil' : <>Un espace <em>à votre image.</em></>}</h1>{guided && <p role="status">Étape {step+1} sur 3. Vous pourrez modifier vos choix ensuite.</p>}
       <p>Vos objectifs, vos habitudes et vos préférences, au même endroit.</p></div>
     {loading ? <p className="profile-notice">Chargement de votre profil…</p>
     : !profile ? <div className="profile-notice" role="alert">{error || 'Impossible de charger le profil.'}</div>
     : <form className="profile-layout" onSubmit={e=>void submit(e)} aria-busy={saving}>
       <fieldset className="profile-edit-fields" aria-label="Paramètres personnels" disabled={saving}>
-      <section className="profile-panel profile-identity">
+      {(!guided || step === 0) && <section className="profile-panel profile-identity">
         <div className="profile-avatar">
           {profile.avatarDataUrl ? <img src={profile.avatarDataUrl} alt="Photo de profil"/> : <span>{profile.displayName.trim().charAt(0).toUpperCase() || profileInitial(email).charAt(0).toUpperCase()}</span>}
         </div>
@@ -97,8 +99,9 @@ export default function ProfileSettings({email,onSaved}: Props) {
         <h2>{profile.displayName || profileInitial(email)}</h2><p>{email}</p>
         <div className="profile-detail"><span>Votre objectif</span><strong>{profile.goal==='maintain'?'Stabiliser':profile.goal==='lose'?'Réduire':'Augmenter'} le poids</strong></div>
         <div className="profile-detail"><span>Vos repas quotidiens</span><strong>{profile.mealsPerDay}</strong></div>
-      </section>
+      </section>}
       <section className="profile-panel profile-fields">
+        {(!guided || step === 0) && <>
         <div className="profile-section-title"><small>01 / IDENTITÉ & OBJECTIFS</small><h2>Mes repères</h2></div>
         <div className="profile-form-grid">
           <label>Nom affiché<input maxLength={80} value={profile.displayName} onChange={e=>patch('displayName',e.target.value)} placeholder="Votre prénom" /></label>
@@ -108,6 +111,8 @@ export default function ProfileSettings({email,onSaved}: Props) {
             <option value="maintain">Stabiliser mon poids</option><option value="lose">Réduire mon poids</option><option value="gain">Augmenter mon poids</option>
           </select></label>
         </div>
+        </>}
+        {(!guided || step === 1) && <>
         <div className="profile-section-title"><small>02 / ALIMENTATION</small><h2>Ma façon de manger</h2></div>
         <div className="profile-form-grid">
           <label>Type d'alimentation<select value={profile.dietaryPattern} onChange={e=>patch('dietaryPattern',e.target.value as Profile['dietaryPattern'])}>
@@ -122,14 +127,21 @@ export default function ProfileSettings({email,onSaved}: Props) {
           <label>Début du jeûne<input type="time" required={profile.fastingEnabled} value={profile.fastingStart??''} onChange={e=>patch('fastingStart',e.target.value||null)}/></label>
           <label>Fin du jeûne<input type="time" required={profile.fastingEnabled} value={profile.fastingEnd??''} onChange={e=>patch('fastingEnd',e.target.value||null)}/></label>
         </div>}
+        </>}
+        {(!guided || step === 2) && <>
         <div className="profile-section-title"><small>03 / PRÉFÉRENCES</small><h2>Mes habitudes</h2></div>
         <div className="profile-form-grid"><label>Fuseau horaire<input value={profile.timeZone} onChange={e=>patch('timeZone',e.target.value)} required/></label></div>
         <label className="profile-notes">Notes et préférences personnelles<textarea maxLength={1200} rows={4} value={profile.notes} onChange={e=>patch('notes',e.target.value)} placeholder="Mes aliments habituels, mes préférences, mes objectifs…"/></label>
+        </>}
         {error && <p className="profile-feedback error" role="alert">{error}</p>}
         {message && <p className="profile-feedback" role="status">{message}</p>}
       </section>
       </fieldset>
-      <button type="submit" className="profile-save profile-save-submit" disabled={saving||photoProcessing}>{photoProcessing?'Traitement de la photo…':saving?'Enregistrement…':'Enregistrer mon profil'}</button>
+      {guided && <div className="profile-guide-controls">
+        {step > 0 && <button type="button" disabled={saving} onClick={()=>setStep(step-1)}>Retour</button>}
+        <button type="button" disabled={saving} onClick={onGuideDone}>Passer la configuration</button>
+      </div>}
+      <button type="submit" className="profile-save profile-save-submit" disabled={saving||photoProcessing}>{photoProcessing?'Traitement de la photo…':saving?'Enregistrement…':guided && step < 2 ? 'Continuer' : 'Enregistrer mon profil'}</button>
     </form>}
   </div>
 }

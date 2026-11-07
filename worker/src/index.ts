@@ -1,3 +1,4 @@
+import { addWaist, deleteWaist, listWaist } from './supabase-waist.ts'
 import { askCoach, CoachInputError, readCoachJson, type CoachEnv } from './coach.ts'
 import { analyzePhoto, expirePhotos, photoRpc } from './photo-service.ts'
 import { listPersonalFoods, getPersonalFood, savePersonalFood, archivePersonalFood, PersonalFoodError } from './personal-foods.ts'
@@ -130,6 +131,22 @@ app.get('/api/foods/:fdcId', async (c) => {
     const detail = mapDetailFood(payload)
     return c.json({ ...detail, keyNutrients: selectKeyNutrients(detail.nutrients) })
   } catch (error) { return respondWithError(c, error) }
+})
+
+app.get('/api/private/waist-measurements', async c => {
+  try { return c.json({ measurements: await listWaist(c.env, c.get('userScope').userId, fetcher) }) }
+  catch (error) { return respondProfileError(c, error) }
+})
+app.post('/api/private/waist-measurements', async c => {
+  let body: unknown
+  try { body = await c.req.json() } catch { return c.json({ error: { message: 'Une mesure JSON est attendue.' } }, 400) }
+  if (containsUserId(body)) return c.json({ error: { message: 'L’identité utilisateur provient exclusivement de la session.' } }, 403)
+  try { return c.json({ measurement: await addWaist(c.env, c.get('userScope').userId, body, fetcher) }, 201) }
+  catch (error) { return respondProfileError(c, error) }
+})
+app.delete('/api/private/waist-measurements/:id', async c => {
+  try { await deleteWaist(c.env, c.get('userScope').userId, c.req.param('id'), fetcher); return c.body(null, 204) }
+  catch (error) { return respondProfileError(c, error) }
 })
 
 app.get('/api/private/measurements', async (c) => {
