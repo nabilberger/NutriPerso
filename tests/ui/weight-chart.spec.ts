@@ -1,0 +1,22 @@
+import { expect, test } from '@playwright/test'
+
+test('weight chart filters dates and exposes exact measurements', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByText('« Que ton alimentation soit ta première médecine. »', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /Suivi/ }).filter({ visible: true }).first().click()
+  const chart = page.getByRole('group', { name: 'Évolution du poids en kilogrammes' })
+  await expect(chart.getByRole('button')).toHaveCount(3)
+  await page.getByRole('button', { name: 'Semaine' }).click()
+  await expect(chart.getByRole('button')).toHaveCount(2)
+  const point = chart.getByRole('button', { name: '2026-11-04 · 72,3 kg' })
+  await point.focus()
+  await point.press('Enter')
+  await expect(page.locator('.weight-detail')).toContainText('2026-11-04 · 72,3 kg')
+  await page.getByRole('button', { name: 'Personnalisée' }).click()
+  await page.getByLabel('Du', { exact: true }).fill('2026-10-20')
+  await page.getByLabel('Au', { exact: true }).fill('2026-10-20')
+  await expect(chart.getByRole('button')).toHaveCount(1)
+  await expect(page.locator('.weight-detail')).toContainText('2026-10-20 · 73,8 kg')
+  await page.getByLabel('Au', { exact: true }).fill('2026-10-19')
+  await expect(page.getByRole('alert')).toHaveText('La date de début doit précéder la date de fin.')
+})

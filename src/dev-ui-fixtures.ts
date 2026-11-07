@@ -93,6 +93,16 @@ const body=(init:RequestInit)=>JSON.parse(String(init.body??'{}')) as Record<str
 export async function fixtureRequest<T>(path:string,init:RequestInit={}):Promise<T>{
   const url=new URL(path,'http://nutrip.local'),method=(init.method??'GET').toUpperCase()
   if(url.pathname==='/api/private/photos'&&method==='GET')return {photos:[]} as T
+  if(url.pathname==='/api/private/measurements'&&method==='GET')return {measurements:[
+    {id:'fixture-weight-3',measuredOn:'2026-11-07',weightKg:71.5,note:'Mesure de démonstration'},
+    {id:'fixture-weight-2',measuredOn:'2026-11-04',weightKg:72.3,note:''},
+    {id:'fixture-weight-1',measuredOn:'2026-10-20',weightKg:73.8,note:''},
+  ]} as T
+  if(url.pathname==='/api/private/profile'&&method==='GET')return {profile:{
+    displayName:'',avatarDataUrl:null,heightCm:null,targetWeightKg:70,goal:'lose',dietaryPattern:'mediterranean',
+    mealsPerDay:3,fastingEnabled:false,fastingStart:null,fastingEnd:null,avoidAddedSalt:false,avoidAddedSugar:false,
+    notes:'',timeZone:'UTC',
+  }} as T
   if(url.pathname==='/api/private/photo-analysis'&&method==='POST')return {proposal:{version:1,warning:'Simulation uniquement : photo ambiguë, ingrédients cachés possibles.',items:[{name:'Pois chiches',amount:'120',unit:'g',source:'USDA',uncertainty:'Estimation visuelle'},{name:'Sauce',amount:null,unit:'g',source:'Catalogue personnel',uncertainty:'Quantité inconnue'}]}} as T
   if(url.pathname==='/api/private/photo-analysis/usage')return {reservedDh:1,requests:1} as T
   if(url.pathname.startsWith('/api/private/photos/')&&method==='DELETE')return undefined as T
