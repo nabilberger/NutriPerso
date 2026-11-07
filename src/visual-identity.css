@@ -48,3 +48,15 @@
 .weight-chart g[role="button"] { cursor: pointer; }
 .weight-chart g[role="button"]:focus-visible .weight-point { stroke: var(--identity-leaf); stroke-width: 4; }
 .weight-detail { min-height: 2rem; padding: .5rem; background: var(--identity-wash); color: var(--identity-forest); border-radius: 8px; overflow-wrap: anywhere; }
+.profile-guide-invite { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin: .8rem clamp(1rem, 4vw, 3rem) 0; padding: .75rem 1rem; border-radius: 12px; background: var(--identity-wash); color: var(--identity-forest); }
+.profile-guide-invite p { flex: 1 1 15rem; margin: 0; }
+.profile-guide-invite button, .profile-guide-controls button, .profile-guide-reopen { min-height: 44px; padding: .35rem .7rem; border: 1px solid #b9cebf; border-radius: 10px; background: white; color: var(--identity-forest); }
+.profile-guide-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+.profile-guide-reopen { align-self: flex-start; margin: .8rem clamp(1rem, 4vw, 3rem) 0; }
+.fasting-indicator, .fasting-settings { margin: .7rem clamp(1rem, 4vw, 3rem); padding: .65rem 1rem; border-radius: 10px; color: var(--identity-forest); background: var(--identity-wash); }
+.fasting-indicator { align-self: flex-start; font-size: .8rem; }
+.fasting-settings .profile-check { min-height: 36px; }
+@media (prefers-reduced-motion: no-preference) {
+  .profile-feedback[role="status"] { animation: action-feedback 450ms ease-out; }
+  @keyframes action-feedback { from { background-color: #d8ebd3; } }
+}

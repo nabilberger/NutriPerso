@@ -7,6 +7,7 @@ import { AuthGate, useAuth } from './auth/AuthProvider'
 import { nextAccountMenuIndex } from './account-menu-navigation'
 import Journal from './Journal'
 import Coach from './Coach'
+import { FastingMonitor, FastingSettings } from './Fasting'
 import MealHistory from './MealHistory'
 import type { MealReuseDTO } from './meal-reuse'
 import { formatDashboardEnergy } from './dashboard-summary.ts'
@@ -33,6 +34,17 @@ export default function App() {
 function AuthenticatedApp({ email, userId }: { readonly email: string | null; readonly userId: string }) {
   const { signOut } = useAuth()
   const [active, setActive] = useState<Section>('home')
+  const guideKey = 'nutrip-profile-guide-v1:' + userId
+  const [guideSeen, setGuideSeen] = useState(() => {
+    try { return localStorage.getItem(guideKey) === 'done' } catch { return false }
+  })
+  const [guided, setGuided] = useState(false)
+  function finishGuide() {
+    try { localStorage.setItem(guideKey, 'done') } catch { /* Available for this session. */ }
+    setGuideSeen(true)
+    setGuided(false)
+  }
+  function openGuide() { setGuided(true); setActive('profile') }
   const [reuseRequest, setReuseRequest] = useState<{ readonly token: number; readonly source: MealReuseDTO } | null>(null)
   const reuseToken = useRef(0)
   const acknowledgeReuse = useCallback(() => setReuseRequest(null), [])
@@ -103,7 +115,13 @@ function AuthenticatedApp({ email, userId }: { readonly email: string | null; re
   return <div className="shell">
     <aside className="sidebar"><a className="brand" href="#home" onClick={() => setActive('home')}><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></a><p className="nav-label">ESPACE PERSONNEL</p><nav>{sections.filter((item) => item.id !== 'profile').map((item) => <button key={item.id} className={active === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setActive(item.id)}><span className="nav-icon">{item.icon}</span>{item.label}{active === item.id && <i />}</button>)}</nav><div className="sidebar-bottom"><div className="aside-note"><span>✧</span><p><b>À votre rythme.</b><br/>Un petit pas compte aussi.</p></div><button ref={sidebarAccountTriggerRef} className="profile profile-entry" type="button" onClick={toggleAccountMenu} aria-haspopup="menu" aria-expanded={accountMenuOpen} aria-controls="nutrip-account-menu" aria-label="Ouvrir le menu utilisateur"><span className="avatar">{avatar}</span><span><b>{displayName}</b><small>{email ?? 'Mon compte'}</small></span><span className="profile-chevron" aria-hidden="true">⌄</span></button></div></aside>
     <main><header className="topbar"><div className="mobile-brand"><span className="brand-mark">✦</span><span>Nutri<em>Perso</em></span></div><div className="crumb">Mon espace <span>/</span> <b>{current?.label}</b></div><div className="top-actions"><span className="today">{todayLabel()}</span><button className="coach-button" type="button" aria-label="Ouvrir Coach IA" onClick={() => setActive('coach')}><span aria-hidden="true">✳</span><b>Coach IA</b></button><button ref={headerAccountTriggerRef} type="button" className="avatar small profile-shortcut" onClick={toggleAccountMenu} title="Menu utilisateur" aria-label="Ouvrir le menu utilisateur" aria-haspopup="menu" aria-expanded={accountMenuOpen} aria-controls="nutrip-account-menu">{avatar}</button></div>{accountMenuOpen && <div ref={accountMenuRef} id="nutrip-account-menu" className="account-menu" role="menu" aria-label="Menu utilisateur" onKeyDown={handleAccountMenuKeyDown}><div className="account-menu-info" role="none"><b>{displayName}</b><small>{email}</small></div><button ref={(element) => { accountMenuItemsRef.current[0] = element }} role="menuitem" type="button" onClick={() => navigateFromAccountMenu('profile')}>Mon profil et préférences</button><button ref={(element) => { accountMenuItemsRef.current[1] = element }} role="menuitem" type="button" onClick={() => {setAccountMenuOpen(false);void signOut()}}>Se déconnecter</button></div>}</header>
-    {active === 'home' ? <Dashboard navigate={setActive} userId={userId}/> : active === 'journal' ? <Journal userId={userId} reuseRequest={reuseRequest} onReuseConsumed={acknowledgeReuse}/> : active === 'history' ? <MealHistory onReuse={(source) => { reuseToken.current += 1; setReuseRequest({ token: reuseToken.current, source }); setActive('journal') }}/> : active === 'profile' ? <ProfileSettings email={email} onSaved={onProfileSaved} /> : active === 'catalog' ? <FoodExplorer /> : active === 'recipes' ? <RecipeLibrary onUse={snapshot => { reuseToken.current += 1; setReuseRequest({ token: reuseToken.current, source: { sourceKind: 'recipe', sourceId: snapshot.snapshotId, label: snapshot.recipe.name, mealKind: 'lunch', items: [{ kind: 'recipe', recipeId: snapshot.recipe.id, quantity: { kind: 'servings', amount: '1' }, sortOrder: 0 }] } }); setActive('journal') }}/> : active === 'tracking' ? <WeightTracking /> : <Coach key={userId} userId={userId}/>}
+    <FastingMonitor profile={profile} userId={userId} show={active === 'home'}/>
+    {active === 'home' && profile && !guideSeen && <section className="profile-guide-invite" aria-label="Première configuration">
+      <p>Configurez votre profil en trois étapes, à votre rythme.</p>
+      <button type="button" onClick={openGuide}>Configurer mon profil</button>
+      <button type="button" onClick={finishGuide}>Plus tard</button>
+    </section>}
+    {active === 'home' ? <Dashboard navigate={setActive} userId={userId}/> : active === 'journal' ? <Journal userId={userId} reuseRequest={reuseRequest} onReuseConsumed={acknowledgeReuse}/> : active === 'history' ? <MealHistory onReuse={(source) => { reuseToken.current += 1; setReuseRequest({ token: reuseToken.current, source }); setActive('journal') }}/> : active === 'profile' ? <><button className="profile-guide-reopen" type="button" onClick={openGuide} hidden={guided}>Relancer la configuration</button><ProfileSettings key={String(guided)} email={email} onSaved={onProfileSaved} guided={guided} onGuideDone={finishGuide}/>{!guided && profile?.fastingEnabled && <FastingSettings userId={userId}/>}</> : active === 'catalog' ? <FoodExplorer /> : active === 'recipes' ? <RecipeLibrary onUse={snapshot => { reuseToken.current += 1; setReuseRequest({ token: reuseToken.current, source: { sourceKind: 'recipe', sourceId: snapshot.snapshotId, label: snapshot.recipe.name, mealKind: 'lunch', items: [{ kind: 'recipe', recipeId: snapshot.recipe.id, quantity: { kind: 'servings', amount: '1' }, sortOrder: 0 }] } }); setActive('journal') }}/> : active === 'tracking' ? <WeightTracking /> : <Coach key={userId} userId={userId}/>}
     <footer>NutriPerso <span>·</span> Votre espace, vos repères.</footer></main>
     <nav className="mobile-nav" aria-label="Navigation principale">{[sections[1], sections[2], sections[4], sections[0], sections[5], sections[3]].map((item) => <button key={item.id} className={`mobile-link${item.id === 'home' ? ' home-link' : ''}${active === item.id ? ' active' : ''}`} onClick={() => setActive(item.id)} aria-current={active === item.id ? 'page' : undefined}><span aria-hidden="true">{item.icon}</span><small>{item.id === 'home' ? 'Accueil' : item.label}</small></button>)}</nav>
   </div>
